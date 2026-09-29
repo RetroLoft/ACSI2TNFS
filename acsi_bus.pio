@@ -1,0 +1,97 @@
+; ACSI bus PIO programs for the ACSI2TNFS board (Pico, PIO0)
+;
+; Pin map (PCB):  GP8..GP15 = D0..D7 (through U1 SN74LVC245A)
+;                 GP16 = /CS, GP17 = /RESET, GP18 = /ACK, GP19 = A1, GP20 = R/W
+;                 GP21 = IRQ transistor (high = /IRQ low)
+;                 GP22 = DRQ transistor (high = /DRQ low)
+;
+; A captured sample is 13 bits: bit0-7 = D0..D7, bit8 = /CS, bit9 = /RESET,
+; bit10 = /ACK, bit11 = A1, bit12 = R/W.
+;
+; Timing (Atari ACSI/DMA Integration Guide, B4):
+;   /CS write : data valid 80 ns before /CS falls, /CS low 220..270 ns
+;   /CS read  : device data valid at most 100 ns after /CS falls
+;   /ACK      : low 220..270 ns; device data valid at most 100 ns after /ACK falls
+; We therefore sample ~150 ns after the falling edge (2 sync + 17 cycles @125 MHz),
+; which is inside the valid window for both directions.
+
+; ---------------------------------------------------------------------------
+; SM0: /CS capture. Also releases /IRQ immediately on every /CS falling edge
+; (the guide requires /IRQ inactive within 20 us, ideally < 500 ns).
+; set_base = GP21 (IRQ). The CPU asserts IRQ by exec'ing "set pins, 1".
+; ---------------------------------------------------------------------------
+.program acsi_cs
+.wrap_target
+    wait 1 gpio 16
+    wait 0 gpio 16
+    set pins, 0             ; release /IRQ
+    nop [15]
+    in pins, 13
+    push noblock
+.wrap
+
+; ---------------------------------------------------------------------------
+; SM1: /ACK capture (sniffer + cross-check in target mode).
+; Keeps sampling while /ACK is low and pushes the last sample taken before
+; the rising edge, so short /ACK pulses are neither missed nor sampled early.
+; jmp_pin = GP18 (/ACK).
+; ---------------------------------------------------------------------------
+.program acsi_ack
+.wrap_target
+    wait 1 gpio 18
+    wait 0 gpio 18
+low:
+    mov isr, pins
+    jmp pin high
+    jmp low
+high:
+    push noblock
+.wrap
+
+; ---------------------------------------------------------------------------
+; SM2: DMA data from device to Atari (Atari "read").
+; out_base = GP8 (8 pins), set_base = GP22 (DRQ). One byte per FIFO word.
+; The byte is on the bus before /DRQ is asserted and stays until /ACK rises.
+; ---------------------------------------------------------------------------
+.program acsi_dout
+public start:
+.wrap_target
+    pull block
+    out pins, 8
+    set pins, 1             ; assert /DRQ
+    wait 0 gpio 18          ; host strobes /ACK
+    set pins, 0             ; release /DRQ as early as possible
+    wait 1 gpio 18
+.wrap
+
+; ---------------------------------------------------------------------------
+; SM3: DMA data from Atari to device (Atari "write").
+; in_base = GP8, set_base = GP22 (DRQ), jmp_pin = GP18 (/ACK).
+; On writes the ST sometimes gives short, back-to-back /ACK pulses (slow
+; /DRQ release + DMA FIFO refill), and the byte is not always on the bus at
+; the falling edge. So: sample continuously while /ACK is low and keep the
+; last value before the rising edge (data valid up to 10 ns after it).
+; The RX FIFO is emptied by RP2040 DMA, so this SM never stalls.
+; ---------------------------------------------------------------------------
+.program acsi_din
+public start:
+.wrap_target
+    set pins, 1             ; assert /DRQ
+    wait 0 gpio 18
+    set pins, 0             ; release /DRQ
+low:
+    mov isr, pins
+    jmp pin high
+    jmp low
+high:
+    push block
+.wrap
+
+; ---------------------------------------------------------------------------
+; PIO1 SM0: logic analyser. 16 pins from GP8 (D0-D7, /CS, /RESET, /ACK, A1,
+; R/W, IRQ out, DRQ out, GP23) every PIO clock; two samples per FIFO word.
+; ---------------------------------------------------------------------------
+.program acsi_la
+.wrap_target
+    in pins, 16
+.wrap

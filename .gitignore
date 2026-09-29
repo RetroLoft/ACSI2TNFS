@@ -1,0 +1,14 @@
+# build output
+build/
+atari/out/
+
+# KiCad temporary / cache files
+*.lck
+fp-info-cache
+fp-*.tmp
+_autosave-*
+\#auto_saved_files\#
+*-backups/
+
+# VS Code: keep project config
+!.vscode/*

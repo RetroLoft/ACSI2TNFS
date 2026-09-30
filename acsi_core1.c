@@ -682,6 +682,16 @@ static uint8_t exec_cmd(const uint8_t *cdb, uint8_t cdb_len, uint32_t *bytes)
             *bytes = 512;
             cfgrpc_debug(reply);
             return 0x00;
+        case 8:     /* drive letters for the driver, 512 bytes: "ATL", count,
+                       then per root sector partition entry the wanted letter
+                       ('D'..'Z') or 0 = next free one (entry 0 = C: flash) */
+            memset(reply, 0, 512);
+            memcpy(reply, "ATL", 3);
+            reply[3] = 4;
+            for (uint32_t k = 0; k < net_vdrives() && k < 3; k++)
+                reply[5 + k] = net_vdrive_letter(k);
+            *bytes = 512;
+            return send_reply(512);
         }
         break;
     }

@@ -191,6 +191,7 @@ void net_init(void) { }
 void net_poll(void) { cfg_new = false; test_req = false; }
 static void drives_from_settings(void) { }
 uint32_t net_vdrives(void) { return 0; }
+uint8_t net_vdrive_letter(uint32_t k) { (void)k; return 0; }
 uint32_t net_status_text(char *p, uint32_t max)
 {
     int n = snprintf(p, max, "\r\nNo Wi-Fi on this board\r\n");
@@ -338,6 +339,7 @@ static bool wifi_connect(void)
  */
 typedef struct {
     int      slot;                  /* settings slot                         */
+    uint8_t  letter;                /* wanted drive letter, 0 = any          */
     char     server[65];
     char     path[33];
     uint16_t port;
@@ -378,6 +380,7 @@ static void drives_from_settings(void)
         vdrive_t *d = &vd[nvd++];
         memset(d, 0, sizeof *d);
         d->slot = i;
+        d->letter = s->letter >= 'D' && s->letter <= 'Z' ? s->letter : 0;
         snprintf(d->server, sizeof d->server, "%s", s->host);
         snprintf(d->path, sizeof d->path, "%s", s->mount_path[0] ? s->mount_path : "/");
         d->port = s->port ? s->port : 16384;
@@ -388,6 +391,7 @@ static void drives_from_settings(void)
 }
 
 uint32_t net_vdrives(void) { return (uint32_t)nvd; }
+uint8_t net_vdrive_letter(uint32_t k) { return k < (uint32_t)nvd ? vd[k].letter : 0; }
 
 uint32_t net_status_text(char *p, uint32_t max)
 {

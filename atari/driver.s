@@ -34,6 +34,7 @@ old_resvec: dc.l    0
 pstart:     ds.l    MAXPART             ; physical start sector
 pshift:     ds.w    MAXPART             ; log2(logical/physical sector size)
 bpbs:       ds.w    9*MAXPART           ; TOS BPBs, 18 bytes each
+pdrv:       ds.w    MAXPART             ; BIOS drive number per partition
 cdb:        ds.b    6
             even
 bounce:     ds.b    512
@@ -41,12 +42,17 @@ bounce:     ds.b    512
 ; ---------------------------------------------------------------------------
 ; d0.w = BIOS drive -> d1.l = partition index, N set when not ours
 ; ---------------------------------------------------------------------------
-find:   move.w  d0,d1
-        sub.w   firstdrv(pc),d1
-        bmi.s   .no
-        cmp.w   npart(pc),d1
+find:   moveq   #0,d1
+        lea     pdrv(pc),a1
+.f:     cmp.w   npart(pc),d1
         bge.s   .no
-        ext.l   d1
+        move.w  d1,d2
+        add.w   d2,d2
+        cmp.w   (a1,d2.w),d0
+        beq.s   .yes
+        addq.w  #1,d1
+        bra.s   .f
+.yes:   ext.l   d1
         rts
 .no:    moveq   #-1,d1
         rts
@@ -244,18 +250,6 @@ init:   movem.l d0-d7/a0-a6,-(sp)
         tst.l   d0
         bne     .fail
 
-        ; first free drive letter from C:
-        move.l  DRVBITS.w,d0
-        moveq   #2,d1
-.free:  btst    d1,d0
-        beq.s   .gotd
-        addq.w  #1,d1
-        cmp.w   #26,d1
-        blt.s   .free
-        bra     .fail
-.gotd:  lea     firstdrv(pc),a0
-        move.w  d1,(a0)
-
         ; collect partitions ($1c6: flag, "GEM"/"BGM", start.l, size.l)
         moveq   #0,d7                   ; partition entry
         moveq   #0,d6                   ; partitions found
@@ -355,15 +349,66 @@ init:   movem.l d0-d7/a0-a6,-(sp)
         cmp.w   npart(pc),d7
         blt     .bpb
 
-        ; drive bits and vectors
-        move.w  firstdrv(pc),d1
-        move.w  npart(pc),d2
-        subq.w  #1,d2
-        move.l  DRVBITS.w,d0
-.bits:  bset    d1,d0
+        ; drive letters: the first free one from C: for the flash disk; for
+        ; the TNFS partitions the letter the adapter asks for (vendor sub 8,
+        ; set in the configuration program) when it is free, else the next
+        ; free one
+        lea     cdb(pc),a0
+        move.w  id(pc),d1
+        lsl.b   #5,d1
+        ori.b   #$11,d1
+        move.b  d1,(a0)
+        move.b  #'A',1(a0)
+        move.b  #'T',2(a0)
+        move.b  #8,3(a0)
+        clr.b   4(a0)
+        clr.b   5(a0)
+        lea     bounce(pc),a1
+        clr.l   (a1)
+        moveq   #1,d0
+        moveq   #0,d1
+        bsr     acsi_cmd
+        lea     bounce(pc),a2
+        cmp.l   #$41544c04,(a2)         ; "ATL", 4 entries
+        beq.s   .lok
+        clr.l   4(a2)                   ; no answer: no wishes
+.lok:   move.l  DRVBITS.w,d0
+        lea     pdrv(pc),a1
+        lea     msg_drv(pc),a3
+        moveq   #0,d7
+.let:   moveq   #0,d1
+        move.b  4(a2,d7.w),d1           ; wanted letter or 0
+        sub.b   #'A',d1
+        cmp.w   #3,d1                   ; D: .. Z: only
+        blt.s   .auto
+        cmp.w   #26,d1
+        bge.s   .auto
+        btst    d1,d0
+        beq.s   .got
+.auto:  moveq   #2,d1
+.fr:    btst    d1,d0
+        beq.s   .got
         addq.w  #1,d1
-        dbra    d2,.bits
+        cmp.w   #26,d1
+        blt.s   .fr
+        bra     .fail
+.got:   bset    d1,d0
+        move.w  d7,d2
+        add.w   d2,d2
+        move.w  d1,(a1,d2.w)
+        add.b   #'A',d1
+        move.b  d1,(a3)+
+        move.b  #':',(a3)+
+        move.b  #' ',(a3)+
+        addq.w  #1,d7
+        cmp.w   npart(pc),d7
+        blt.s   .let
+        move.b  #13,(a3)+
+        move.b  #10,(a3)+
+        clr.b   (a3)
         move.l  d0,DRVBITS.w
+        lea     firstdrv(pc),a0
+        move.w  pdrv(pc),(a0)
 
         ; boot from our first partition, like HDDRIVER does. GEMDOS already
         ; picked its current drive from _bootdev before the floppy and hard
@@ -397,9 +442,6 @@ init:   movem.l d0-d7/a0-a6,-(sp)
         move.l  #$31415926,RESVALID.w
 
         lea     msg_ok(pc),a0
-        move.w  firstdrv(pc),d0
-        add.b   #'A',d0
-        move.b  d0,msg_drv-msg_ok(a0)
         bsr     print
         movem.l (sp)+,d0-d7/a0-a6
         rts
@@ -410,8 +452,8 @@ init:   movem.l d0-d7/a0-a6,-(sp)
         rts
 
 msg_hello:  dc.b    13,10,27,"p ACSI2TNFS flash disk driver 0.2 ",27,"q",13,10,0
-msg_ok:     dc.b    " mounted as drive "
-msg_drv:    dc.b    "C:",13,10,0
+msg_ok:     dc.b    " mounted as "
+msg_drv:    ds.b    16                  ; "C: D: E: ",13,10,0
 msg_fail:   dc.b    " disk not usable - driver not installed",13,10,0
             even
 

@@ -138,6 +138,7 @@ void net_settings_from_atari(const uint8_t *blk512);   /* core1: vendor sub 3  *
 void net_request_test(void);                           /* core1: vendor sub 4  */
 uint32_t net_status_text(char *p, uint32_t max);       /* core1: info text     */
 uint32_t net_vdrives(void);                            /* TNFS partitions (fixed after start-up) */
+uint8_t net_vdrive_letter(uint32_t k);                 /* wanted letter of partition k, 0 = any */
 bool net_vread(uint32_t drive, uint32_t rel, uint32_t n, uint8_t *buf); /* core1: virtual part. */
 void vfat_bootsector(uint8_t *b);
 

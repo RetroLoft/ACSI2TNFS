@@ -10,6 +10,7 @@ HDV_BPB     equ $472
 HDV_RW      equ $476
 HDV_MEDIACH equ $47e
 DRVBITS     equ $4c2
+BOOTDEV     equ $446
 MAXPART     equ 4
 CHUNK       equ 64                      ; sectors per ACSI command
 
@@ -343,6 +344,10 @@ init:   movem.l d0-d7/a0-a6,-(sp)
         addq.w  #1,d1
         dbra    d2,.bits
         move.l  d0,DRVBITS.w
+
+        ; boot from the first hard disk partition like AHDI does: TOS runs
+        ; the AUTO folder and reads DESKTOP.INF from _bootdev (else A:)
+        move.w  firstdrv(pc),BOOTDEV.w
 
         lea     old_bpb(pc),a0
         move.l  HDV_BPB.w,(a0)

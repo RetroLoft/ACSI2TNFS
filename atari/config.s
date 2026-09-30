@@ -7,7 +7,10 @@
 
         section text
 
-start:  lea     msg_title(pc),a0
+start:  move.l  4(sp),a0                ; our basepage
+        lea     basepage(pc),a1
+        move.l  a0,(a1)
+        lea     msg_title(pc),a0
         bsr     print
 
         ; --- find the adapter: INQUIRY on ids 0..7 ---
@@ -57,6 +60,8 @@ menu:   bsr     show_info
         beq     netcfg
         cmp.b   #'4',d0
         beq     nettest
+        cmp.b   #'5',d0
+        beq     crashdump
         cmp.b   #'q',d0
         beq     quit
         cmp.b   #'Q',d0
@@ -170,6 +175,41 @@ nettest:
 .key:   bsr     getkey
         bra     menu
 
+; --- option 5: send the TOS crash save area ($380) to the adapter's console ---
+crashdump:
+        lea     nblk,a0
+        move.w  #511,d0
+.clr:   clr.b   (a0)+
+        dbra    d0,.clr
+        pea     copy380(pc)
+        move.w  #38,-(sp)               ; Supexec
+        trap    #14
+        addq.l  #6,sp
+        move.l  basepage(pc),a0
+        move.l  8(a0),nblk+128          ; p_tbase: where programs get loaded
+        lea     cmd(pc),a0              ; vendor sub 7, 512 bytes Atari -> Pico
+        bsr     vend_hdr
+        move.b  #7,3(a0)
+        lea     dbuf(pc),a1
+        move.l  #nblk,(a1)
+        lea     dsect(pc),a1
+        move.w  #1,(a1)
+        lea     ddir(pc),a1
+        move.w  #1,(a1)
+        bsr     do_cmd
+        lea     msg_dump(pc),a0
+        bsr     print
+        bsr     getkey
+        bra     menu
+
+copy380:
+        lea     $380.w,a0
+        lea     nblk,a1
+        moveq   #31,d0
+.cp:    move.l  (a0)+,(a1)+
+        dbra    d0,.cp
+        rts
+
 ; --- helpers -----------------------------------------------------------------
 
 ; clear screen, title, info text
@@ -258,6 +298,7 @@ quit:   clr.w   -(sp)
 
         include "acsi.inc"
 
+basepage: dc.l   0
 id:     dc.w    0
 dsect:  dc.w    1
 ddir:   dc.w    0
@@ -273,6 +314,7 @@ msg_menu:   dc.b    13,10,"  1  Blink the led",13,10
             dc.b    "  2  Change ACSI id",13,10
             dc.b    "  3  Wi-Fi and TNFS settings",13,10
             dc.b    "  4  Connect and test the TNFS server",13,10
+            dc.b    "  5  Send last crash report to the adapter",13,10
             dc.b    "  Q  Quit",13,10,13,10,"Choice: ",0
 msg_askid:  dc.b    13,10,"New ACSI id (0-7): ",0
 msg_idok:   dc.b    13,10,"Stored. It becomes active after an Atari reset.",13,10
@@ -285,6 +327,7 @@ msg_path:   dc.b    "TNFS path            : ",0
 msg_crlf:   dc.b    13,10,0
 msg_sent:   dc.b    13,10,"Settings stored in the adapter. Press a key.",13,10,0
 msg_sfail:  dc.b    13,10,"Adapter did not accept the settings. Press a key.",13,10,0
+msg_dump:   dc.b    13,10,"Crash report sent. Press a key.",13,10,0
 msg_test:   dc.b    13,10,"Testing... the status above refreshes every second.",13,10
             dc.b    "Press a key to return to the menu.",13,10,0
             even

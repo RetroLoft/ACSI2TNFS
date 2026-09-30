@@ -14,7 +14,10 @@
 #include "pico/stdlib.h"
 #include "hardware/sync.h"
 #include "acsi.h"
+#include "settings.h"
 
+/* runtime view used by the network code: Wi-Fi credentials plus the TNFS
+   drive that is mounted (the first enabled TNFS slot), derived from g_set */
 typedef struct {
     uint32_t magic;
     char     ssid[33];
@@ -24,11 +27,81 @@ typedef struct {
     uint16_t port;
 } net_settings_t;
 
-#define NET_MAGIC 0x544e4653u   /* "TNFS" */
+#define NET_MAGIC 0x544e4653u   /* "TNFS": settings format of firmware 0.3 */
 
 static net_settings_t g_net = {
-    NET_MAGIC, "", "", "192.168.178.10", "/", 16384
+    NET_MAGIC, "", "", "", "/", 16384
 };
+static int g_net_drive = -1;            /* slot mounted as the TNFS drive */
+
+settings_t g_set, g_stage;
+
+void settings_defaults(settings_t *s)
+{
+    memset(s, 0, sizeof *s);
+    s->magic = SET_MAGIC;
+    strcpy(s->country, "NL");
+    s->auth_mode = 7;                   /* WPA2 mixed */
+    s->use_dhcp = 1;
+    s->settings_letter = 'C';
+    strcpy(s->ntp_server, "pool.ntp.org");
+    strcpy(s->utc_offset, "+1");
+}
+
+static void settings_to_runtime(void)
+{
+    memset(&g_net, 0, sizeof g_net);
+    g_net.magic = NET_MAGIC;
+    snprintf(g_net.ssid, sizeof g_net.ssid, "%s", g_set.ssid);
+    snprintf(g_net.pass, sizeof g_net.pass, "%s", g_set.pass);
+    g_net.port = 16384;
+    strcpy(g_net.path, "/");
+    g_net_drive = -1;
+    for (int i = 0; i < SET_MAX_DRIVES; i++) {
+        const set_drive_t *d = &g_set.drv[i];
+        if (d->state != DRV_ENABLED || d->type != DRV_TYPE_TNFS) continue;
+        snprintf(g_net.server, sizeof g_net.server, "%s", d->host);
+        snprintf(g_net.path, sizeof g_net.path, "%s", d->mount_path[0] ? d->mount_path : "/");
+        g_net.port = d->port ? d->port : 16384;
+        g_net_drive = i;
+        break;
+    }
+}
+
+/* persisted blob = the staged settings (what the configuration program saved) */
+const void *net_settings_blob(uint32_t *len)
+{
+    *len = sizeof g_stage;
+    return &g_stage;
+}
+
+void net_settings_load(const void *blob)
+{
+    const settings_t *s = blob;
+    const net_settings_t *old = blob;
+    settings_defaults(&g_set);
+    if (s->magic == SET_MAGIC) {
+        g_set = *s;
+    } else if (old->magic == NET_MAGIC) {
+        /* firmware 0.3 format: Wi-Fi + one TNFS server */
+        snprintf(g_set.ssid, sizeof g_set.ssid, "%.32s", old->ssid);
+        snprintf(g_set.pass, sizeof g_set.pass, "%.64s", old->pass);
+        if (old->server[0]) {
+            set_drive_t *d = &g_set.drv[0];
+            d->state = DRV_ENABLED;
+            d->letter = 'D';
+            d->type = DRV_TYPE_TNFS;
+            d->transport = DRV_UDP;
+            d->port = old->port ? old->port : 16384;
+            snprintf(d->nickname, sizeof d->nickname, "TNFS");
+            snprintf(d->host, sizeof d->host, "%.63s", old->server);
+            snprintf(d->mount_path, sizeof d->mount_path, "%.31s", old->path[0] ? old->path : "/");
+        }
+        printf("settings: converted from the 0.3 format\n");
+    }
+    g_stage = g_set;
+    settings_to_runtime();
+}
 
 /* status shown to the Atari (written by core0, read by core1) */
 static char wifi_status[80] = "not configured";
@@ -40,20 +113,6 @@ static volatile bool cfg_new;
 static uint8_t cfg_blk[512];
 
 extern acsi_cfg_t g_cfg;
-
-const void *net_settings_blob(uint32_t *len)
-{
-    *len = sizeof g_net;
-    return &g_net;
-}
-
-void net_settings_load(const void *blob)
-{
-    const net_settings_t *s = blob;
-    if (s->magic == NET_MAGIC) g_net = *s;
-    g_net.ssid[32] = g_net.pass[64] = g_net.server[64] = g_net.path[96] = 0;
-    if (!g_net.port) g_net.port = 16384;
-}
 
 /* core1 -> core0 hand-over */
 void net_settings_from_atari(const uint8_t *blk512)
@@ -138,6 +197,7 @@ bool net_vread(uint32_t rel, uint32_t n, uint8_t *buf)
 
 #if !BOARD_HAS_WIFI
 
+bool net_link_up(void) { return false; }
 void net_init(void) { }
 void net_poll(void) { cfg_new = false; test_req = false; }
 
@@ -147,10 +207,16 @@ void net_poll(void) { cfg_new = false; test_req = false; }
 #include "lwip/udp.h"
 #include "lwip/tcp.h"
 #include "lwip/dns.h"
+#include "lwip/dhcp.h"
 #include "lwip/ip_addr.h"
 #include "lwip/netif.h"
 
 static bool wifi_inited;
+
+bool net_link_up(void)
+{
+    return wifi_inited && cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA) == CYW43_LINK_UP;
+}
 
 /* apply "SSID\0PASS\0SERVER\0PATH\0" from the Atari; empty = keep */
 static void apply_cfg_block(void)
@@ -162,15 +228,26 @@ static void apply_cfg_block(void)
         while (q < end && *q) q++;
         if (q < end) q++;
     }
+    /* CONFIG.TOS option 3: Wi-Fi + the first TNFS drive, applied at once */
+    set_drive_t *drv = &g_stage.drv[g_net_drive >= 0 ? g_net_drive : 0];
     struct { char *dst; size_t sz; } d[4] = {
-        { g_net.ssid, sizeof g_net.ssid }, { g_net.pass, sizeof g_net.pass },
-        { g_net.server, sizeof g_net.server }, { g_net.path, sizeof g_net.path } };
+        { g_stage.ssid, 33 }, { g_stage.pass, 65 },
+        { drv->host, sizeof drv->host }, { drv->mount_path, sizeof drv->mount_path } };
     for (int i = 0; i < 4; i++) {
         if (f[i] >= end || !*f[i]) continue;
         strncpy(d[i].dst, f[i], d[i].sz - 1);
         d[i].dst[d[i].sz - 1] = 0;
     }
-    g_net.magic = NET_MAGIC;
+    if (drv->host[0] && drv->state == DRV_EMPTY) {
+        drv->state = DRV_ENABLED;
+        drv->type = DRV_TYPE_TNFS;
+        drv->letter = 'D';
+        drv->port = 16384;
+        if (!drv->mount_path[0]) strcpy(drv->mount_path, "/");
+        snprintf(drv->nickname, sizeof drv->nickname, "TNFS");
+    }
+    g_set = g_stage;
+    settings_to_runtime();
     printf("net: settings from Atari: ssid '%s', server %s, path %s\n",
            g_net.ssid, g_net.server, g_net.path);
     cfg_save();
@@ -186,7 +263,9 @@ static bool wifi_connect(void)
     }
     if (!wifi_inited) {
         snprintf(wifi_status, sizeof wifi_status, "starting Wi-Fi chip...");
-        if (cyw43_arch_init_with_country(CYW43_COUNTRY('N', 'L', 0))) {
+        char c0 = g_set.country[0] ? g_set.country[0] : 'X';
+        char c1 = g_set.country[1] ? g_set.country[1] : 'X';
+        if (cyw43_arch_init_with_country(CYW43_COUNTRY(c0, c1, 0))) {
             snprintf(wifi_status, sizeof wifi_status, "Wi-Fi chip init FAILED");
             return false;
         }
@@ -196,7 +275,13 @@ static bool wifi_connect(void)
     if (cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA) == CYW43_LINK_UP)
         return true;
 
-    uint32_t auth = g_net.pass[0] ? CYW43_AUTH_WPA2_MIXED_PSK : CYW43_AUTH_OPEN;
+    /* SideTNFS auth_mode mapping: 0 open, 1-2 WPA TKIP, 3-5 WPA2 AES, 6-8 mixed */
+    static const uint32_t auth_map[9] = {
+        CYW43_AUTH_OPEN, CYW43_AUTH_WPA_TKIP_PSK, CYW43_AUTH_WPA_TKIP_PSK,
+        CYW43_AUTH_WPA2_AES_PSK, CYW43_AUTH_WPA2_AES_PSK, CYW43_AUTH_WPA2_AES_PSK,
+        CYW43_AUTH_WPA2_MIXED_PSK, CYW43_AUTH_WPA2_MIXED_PSK, CYW43_AUTH_WPA2_MIXED_PSK };
+    uint32_t auth = g_set.auth_mode <= 8 ? auth_map[g_set.auth_mode] : CYW43_AUTH_WPA2_MIXED_PSK;
+    if (!g_net.pass[0]) auth = CYW43_AUTH_OPEN;
     for (int attempt = 1; ; attempt++) {
         snprintf(wifi_status, sizeof wifi_status, "connecting to '%s' (try %d)...",
                  g_net.ssid, attempt);
@@ -209,6 +294,23 @@ static bool wifi_connect(void)
         for (;;) {
             int st = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
             if (st == CYW43_LINK_UP) break;
+            if (st == CYW43_LINK_NOIP && !g_set.use_dhcp) {    /* joined: static IP */
+                ip4_addr_t ip, mask, gw, dns;
+                if (ip4addr_aton(g_set.ip, &ip) && ip4addr_aton(g_set.netmask, &mask) &&
+                    ip4addr_aton(g_set.gateway, &gw)) {
+                    cyw43_arch_lwip_begin();
+                    dhcp_stop(netif_default);
+                    netif_set_addr(netif_default, &ip, &mask, &gw);
+                    if (ip4addr_aton(g_set.dns, &dns)) {
+                        ip_addr_t d;
+                        ip_addr_copy_from_ip4(d, dns);
+                        dns_setserver(0, &d);
+                    }
+                    cyw43_arch_lwip_end();
+                    break;
+                }
+                err = "invalid static IP settings";
+            }
             if (st == CYW43_LINK_BADAUTH) err = "wrong password";
             else if (st == CYW43_LINK_NONET) err = "network not found";
             else if (st == CYW43_LINK_FAIL) err = "connection failed";

@@ -12,8 +12,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 OUT = os.path.join(HERE, "out")
 
-DISK_SECTORS = 3064            # acsi.h
-DISK_FLASH_OFFSET = 0x080000   # acsi.h
+DISK_SECTORS = 2040            # acsi.h
+DISK_FLASH_OFFSET = 0x100000   # acsi.h
 DRVSECT = 8                    # layout.inc
 PSTART = 16
 ROOT_ENTRIES = 256
@@ -137,6 +137,10 @@ def main():
     assert len(drv) <= DRVSECT * 512, "driver too large"
     files = [("README.TXT", open(os.path.join(FILES_DIR, "README.TXT"), "rb").read()),
              ("CONFIG.TOS", open(os.path.join(OUT, "CONFIG.TOS"), "rb").read())]
+    # GEM configuration program: SideTNFS-Config built with 'make acsi'
+    prg = os.path.join(FILES_DIR, "ACSITNFS.PRG")
+    if os.path.exists(prg):
+        files.append(("ACSITNFS.PRG", open(prg, "rb").read()))
 
     psize = DISK_SECTORS - PSTART
     disk = bytearray(DISK_SECTORS * 512)

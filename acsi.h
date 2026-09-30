@@ -43,12 +43,12 @@
 
 /* ---------------------------------------------------------------------------
    Flash layout (Pico: 2 MB)
-     0x000000 .. 0x07FFFF  firmware
-     0x080000 .. 0x1FEFFF  disk image (512-byte sectors)
+     0x000000 .. 0x0FFFFF  firmware (incl. the built-in disk image)
+     0x100000 .. 0x1FEFFF  disk image (512-byte sectors)
      0x1FF000 .. 0x1FFFFF  settings
 --------------------------------------------------------------------------- */
-#define DISK_FLASH_OFFSET   0x080000u
-#define DISK_SECTORS        3064u
+#define DISK_FLASH_OFFSET   0x100000u
+#define DISK_SECTORS        2040u
 #define CFG_FLASH_OFFSET    0x1FF000u
 
 /* Virtual FAT16 partition backed by the TNFS server (Wi-Fi boards only).
@@ -58,6 +58,8 @@
 
 /* Root sector: byte holding the ACSI id (patched by the firmware at runtime) */
 #define ROOT_ID_OFFSET      2
+
+#define FW_VERSION_STR      "0.4"
 
 enum { MODE_SNIFF = 0, MODE_TARGET = 1 };
 
@@ -131,6 +133,12 @@ void net_request_test(void);                           /* core1: vendor sub 4  *
 uint32_t net_status_text(char *p, uint32_t max);       /* core1: info text     */
 bool net_vread(uint32_t rel, uint32_t n, uint8_t *buf); /* core1: virtual part.  */
 void vfat_bootsector(uint8_t *b);
+
+/* SideTNFS configuration protocol over ACSI (config.c) */
+void cfgrpc_request(const uint8_t *blk512);   /* core1: vendor sub 5 */
+void cfgrpc_response(uint8_t *out512);        /* core1: vendor sub 6 */
+void cfgrpc_poll(void);                       /* core0: main loop    */
+void cfgrpc_debug(const uint8_t *blk512);     /* core1: vendor sub 7 */
 void net_console_status(void);                         /* core0: 'n' command   */
 void core1_main(void);
 void cfg_save(void);

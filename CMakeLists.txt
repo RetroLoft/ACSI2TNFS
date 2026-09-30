@@ -28,7 +28,7 @@ project(acsi2tnfs C CXX ASM)
 
 pico_sdk_init()
 
-add_executable(acsi2tnfs acsi2tnfs.c acsi_core1.c net.c)
+add_executable(acsi2tnfs acsi2tnfs.c acsi_core1.c net.c config.c)
 
 # Wi-Fi boards (pico_w, pico2_w): lwIP + CYW43, background mode on core0
 if (PICO_CYW43_SUPPORTED)
@@ -45,7 +45,7 @@ target_compile_definitions(acsi2tnfs PRIVATE
 )
 
 pico_set_program_name(acsi2tnfs "acsi2tnfs")
-pico_set_program_version(acsi2tnfs "0.2")
+pico_set_program_version(acsi2tnfs "0.4")
 
 pico_enable_stdio_uart(acsi2tnfs 0)
 pico_enable_stdio_usb(acsi2tnfs 1)

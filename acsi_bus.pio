@@ -39,7 +39,9 @@
 .program acsi_ack
 .wrap_target
     wait 1 gpio 18
-    wait 0 gpio 18
+fall:
+    wait 0 gpio 18 [2]
+    jmp pin fall            ; high again after 3 cycles: a glitch, not a strobe
 low:
     mov isr, pins
     jmp pin high
@@ -52,16 +54,29 @@ high:
 ; SM2: DMA data from device to Atari (Atari "read").
 ; out_base = GP8 (8 pins), set_base = GP22 (DRQ). One byte per FIFO word.
 ; The byte is on the bus before /DRQ is asserted and stays until /ACK rises.
+; Because /DRQ releases slowly (BC547) the ST strobes back to back at full
+; speed, so the next byte must follow /ACK's rising edge as fast as possible:
+; it is pulled during the /ACK pulse and put out right after the edge.
+; Glitch filter: switching all 8 data lines at once (e.g. to 0xFF) right
+; after /ACK rises bounces the buffers' ground and shows up as a few-ns low
+; glitch on the /ACK input. A falling edge only counts if /ACK is still low
+; 3 cycles later (a real strobe is >= 220 ns). jmp_pin = GP18 (/ACK).
 ; ---------------------------------------------------------------------------
 .program acsi_dout
 public start:
+    pull block              ; first byte
 .wrap_target
-    pull block
-    out pins, 8
-    set pins, 1             ; assert /DRQ
-    wait 0 gpio 18          ; host strobes /ACK
-    set pins, 0             ; release /DRQ as early as possible
-    wait 1 gpio 18
+    out pins, 8             ; byte on the bus (OSR already loaded)
+    set pins, 1 [7]         ; assert /DRQ; ignore /ACK while the data lines
+                            ; settle (0xFF bounce looked like a strobe and
+                            ; made us skip a byte). Real strobes are >= 220 ns.
+fall:
+    wait 0 gpio 18 [3]      ; host strobes /ACK ...
+    jmp pin fall            ; ... unless it is high again: switching noise glitch
+    set pins, 0             ; release /DRQ
+public fetch:
+    pull block              ; fetch the next byte while /ACK is still low,
+    wait 1 gpio 18          ; so it is on the bus one cycle after /ACK rises
 .wrap
 
 ; ---------------------------------------------------------------------------
@@ -77,7 +92,9 @@ public start:
 public start:
 .wrap_target
     set pins, 1             ; assert /DRQ
-    wait 0 gpio 18
+fall:
+    wait 0 gpio 18 [2]
+    jmp pin fall            ; glitch filter, see acsi_dout
     set pins, 0             ; release /DRQ
 low:
     mov isr, pins

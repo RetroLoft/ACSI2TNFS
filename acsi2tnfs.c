@@ -33,18 +33,18 @@ typedef struct { uint32_t magic; uint8_t mode, id, verbose, pad; } cfg_flash_t;
 
 /* settings sector layout: [0] cfg_flash_t, [256] network settings (net.c) */
 #define CFG_NET_OFFSET 256
-#define CFG_BYTES      1024
+#define CFG_BYTES      4096   /* whole settings sector */
 const void *net_settings_blob(uint32_t *len);
 void net_settings_load(const void *blob);
 
 static void cfg_load(void)
 {
     const cfg_flash_t *f = (const cfg_flash_t *)(XIP_BASE + CFG_FLASH_OFFSET);
+    net_settings_load((const uint8_t *)f + CFG_NET_OFFSET);   /* defaults when blank */
     if (f->magic != CFG_MAGIC) return;
     if (f->mode <= MODE_TARGET) g_cfg.mode = f->mode;
     if (f->id <= 7) g_cfg.acsi_id = f->id;
     g_cfg.verbose = f->verbose != 0;
-    net_settings_load((const uint8_t *)f + CFG_NET_OFFSET);
 }
 
 static void cfg_write_cb(void *p)
@@ -344,6 +344,7 @@ int main(void)
         was_connected = conn;
 
         net_poll();
+        cfgrpc_poll();
 
         int ch = getchar_timeout_us(0);
         if (ch >= 0) console(ch);

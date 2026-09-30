@@ -6,11 +6,12 @@ die zich via de ACSI-poort gedraagt als harddisk.
 
 Wat staat er op deze schijf?
   README.TXT   dit bestand
-  CONFIG.TOS   configuratieprogramma voor de adapter
+  ACSITNFS.PRG configuratieprogramma (GEM): Wi-Fi, TNFS-drives, klok
+  CONFIG.TOS   eenvoudig configuratieprogramma (tekstscherm)
 
 Hoe werkt het?
   - De Pico beantwoordt ACSI-commando's op device id 0.
-  - De schijf (ca. 1,5 MB) staat in het flashgeheugen van de Pico.
+  - De schijf (ca. 1 MB) staat in het flashgeheugen van de Pico.
   - Sector 0 bevat een bootloader. TOS voert die uit tijdens het
     opstarten; die laadt een kleine driver die de GEM-partitie
     als station C: aanmeldt.

@@ -21,7 +21,7 @@
 #include "acsi.h"
 #include "acsi_bus.pio.h"
 
-#define FW_VERSION "0.3"
+#define FW_VERSION FW_VERSION_STR
 
 #if BOARD_HAS_WIFI
 #define TOTAL_SECTORS (VFAT_START + VFAT_SECTORS)
@@ -153,7 +153,7 @@ static void __not_in_flash_func(sm_stop)(uint sm)
 }
 
 /* /ACK samples = the bytes the Atari actually latched */
-static uint8_t  ackcap[4608];
+static uint8_t  ackcap[33280];   /* one 64-sector transfer + extra strobes */
 static uint32_t ackcap_n;
 static const uint8_t *exp_a, *exp_b;  /* DMA-out stream of this command */
 static uint32_t exp_alen, exp_blen;
@@ -254,6 +254,7 @@ static bool __not_in_flash_func(dma_out2)(const uint8_t *a, uint32_t alen,
     channel_config_set_read_increment(&cb, true);
     channel_config_set_write_increment(&cb, false);
     channel_config_set_dreq(&cb, pio_get_dreq(pio, SM_DOUT, true));
+    channel_config_set_high_priority(&cb, true);
     dma_channel_configure(dch_b, &cb, &pio->txf[SM_DOUT], b, blen, false);
 
     dma_channel_config ca = dma_channel_get_default_config(dch_a);
@@ -261,6 +262,7 @@ static bool __not_in_flash_func(dma_out2)(const uint8_t *a, uint32_t alen,
     channel_config_set_read_increment(&ca, true);
     channel_config_set_write_increment(&ca, false);
     channel_config_set_dreq(&ca, pio_get_dreq(pio, SM_DOUT, true));
+    channel_config_set_high_priority(&ca, true);
     if (blen) channel_config_set_chain_to(&ca, dch_b);
     dma_channel_configure(dch_a, &ca, &pio->txf[SM_DOUT], a, alen, true);
 
@@ -269,7 +271,7 @@ static bool __not_in_flash_func(dma_out2)(const uint8_t *a, uint32_t alen,
     uint32_t t0 = time_us_32(), last_acks = acks;
     while (dma_channel_is_busy(dch_a) || dma_channel_is_busy(dch_b) ||
            !(pio_sm_is_tx_fifo_empty(pio, SM_DOUT) &&
-             pio->sm[SM_DOUT].addr == off_dout + acsi_dout_offset_start &&
+             pio->sm[SM_DOUT].addr == off_dout + acsi_dout_offset_fetch &&
              gpio_get(PIN_ACK))) {
         ack_drain(&acks);
         if (acks != last_acks) { last_acks = acks; t0 = time_us_32(); }
@@ -416,11 +418,23 @@ static uint8_t read_sectors(uint32_t lba, uint32_t n)
         set_sense(0x21, 0x05, 0x21);
         return 0x02;
     }
+    /*
+     * Copy to RAM first, then stream: a flash (XIP) read can stall for a
+     * moment (cache miss, core0 running code from flash). If the DOUT state
+     * machine runs dry then, the /DRQ line that is still low (slow BC547)
+     * makes the ST strobe /ACK again and it latches the previous byte twice.
+     */
     bool ok;
-    if (lba == 0)       /* patched root sector from RAM, rest straight from flash */
+    if (n <= WBUF_SECTORS) {
+        uint32_t i = 0;
+        if (lba == 0) { memcpy(wbuf, root_sector(), 512); i = 1; }
+        memcpy(wbuf + i * 512u, disk_ptr(lba + i), (n - i) * 512u);
+        ok = dma_out2(wbuf, n * 512u, NULL, 0);
+    } else if (lba == 0) {
         ok = dma_out2(root_sector(), 512, disk_ptr(1), (n - 1) * 512u);
-    else
+    } else {
         ok = dma_out2(disk_ptr(lba), n * 512u, NULL, 0);
+    }
     if (!ok) return 0x02;
     g_stats.sectors_read += n;
     return 0x00;
@@ -442,6 +456,7 @@ static bool dma_in(uint8_t *buf, uint32_t len)
     channel_config_set_read_increment(&c, false);
     channel_config_set_write_increment(&c, true);
     channel_config_set_dreq(&c, pio_get_dreq(pio, SM_DIN, false));
+    channel_config_set_high_priority(&c, true);
     dma_channel_configure(dch_a, &c, buf, &pio->rxf[SM_DIN], len, true);
     sm_start(SM_DIN, off_din + acsi_din_offset_start);
 
@@ -646,6 +661,20 @@ static uint8_t exec_cmd(const uint8_t *cdb, uint8_t cdb_len, uint32_t *bytes)
             if (!BOARD_HAS_WIFI) break;
             net_request_test();
             return 0x00;
+        case 5:     /* configuration request, 512 bytes Atari -> Pico */
+            if (!dma_in(reply, 512)) return 0x02;
+            *bytes = 512;
+            cfgrpc_request(reply);
+            return 0x00;
+        case 6:     /* configuration response, 512 bytes Pico -> Atari */
+            cfgrpc_response(reply);
+            *bytes = 512;
+            return send_reply(512);
+        case 7:     /* debug: 512 bytes from the Atari, printed on the USB console */
+            if (!dma_in(reply, 512)) return 0x02;
+            *bytes = 512;
+            cfgrpc_debug(reply);
+            return 0x00;
         }
         break;
     }
@@ -846,6 +875,7 @@ void acsi_hw_init(void)
 
     c = acsi_dout_program_get_default_config(off_dout);
     sm_config_set_out_pins(&c, PIN_D0, 8);
+    sm_config_set_jmp_pin(&c, PIN_ACK);
     sm_config_set_out_shift(&c, true, false, 32);
     sm_config_set_set_pins(&c, PIN_DRQ, 1);
     sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
@@ -878,6 +908,9 @@ void acsi_hw_init(void)
     sm_config_set_fifo_join(&lc, PIO_FIFO_JOIN_RX);
     sm_config_set_clkdiv(&lc, 2.0f);           /* 62.5 MHz = 16 ns per sample */
     pio_sm_init(pio1, 0, off_la, &lc);
+
+    /* NOTE: do not bypass the input synchroniser on /ACK: tried, the PIO
+       then also sees ringing on the cable as extra edges and skips bytes */
 
     pio_sm_set_enabled(pio, SM_CS, true);
     pio_sm_set_enabled(pio, SM_ACK, true);

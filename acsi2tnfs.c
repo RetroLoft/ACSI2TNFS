@@ -84,17 +84,32 @@ static bool disk_seeded(void)
     return memcmp((const void *)(XIP_BASE + DISK_FLASH_OFFSET), disk_seed, 16 * 512) == 0;  /* boot + driver */
 }
 
-static void disk_seed_write(void)
+/* Same partition layout as the built-in image (root sector partition table
+   and the C: boot sector's BPB)? Then only boot code and driver changed and
+   the files on C: can stay. */
+static bool disk_same_layout(void)
 {
-    printf("writing built-in disk image (%u KB)...\n", DISK_SEED_BLOCKS * 4);
-    for (uint32_t b = 0; b < DISK_SEED_BLOCKS; b++) {
+    const uint8_t *f = (const uint8_t *)(XIP_BASE + DISK_FLASH_OFFSET);
+    return memcmp(f + 0x1c2, disk_seed + 0x1c2, 0x1fe - 0x1c2) == 0 &&
+           memcmp(f + 16 * 512 + 11, disk_seed + 16 * 512 + 11, 0x3e - 11) == 0;
+}
+
+/* all = false: only sectors 0-15 (root sector and driver, flash blocks 0-1) */
+static void disk_seed_write_part(bool all)
+{
+    uint32_t nblk = all ? DISK_SEED_BLOCKS : 2;
+    if (all) printf("writing built-in disk image (%lu KB)...\n", (unsigned long)nblk * 4);
+    else     printf("updating boot code and driver, files on C: are kept...\n");
+    for (uint32_t b = 0; b < nblk; b++) {
         memcpy(seed_buf, disk_seed + b * FLASH_SECTOR_SIZE, FLASH_SECTOR_SIZE);
         int r = flash_safe_execute(seed_cb, (void *)(uintptr_t)b, 1000);
         if (r != PICO_OK) { printf("!! flash write failed at block %lu (%d)\n", (unsigned long)b, r); return; }
     }
-    int bad = memcmp((const void *)(XIP_BASE + DISK_FLASH_OFFSET), disk_seed, sizeof disk_seed);
+    int bad = memcmp((const void *)(XIP_BASE + DISK_FLASH_OFFSET), disk_seed, nblk * FLASH_SECTOR_SIZE);
     printf("disk image %s\n", bad ? "VERIFY FAILED" : "written and verified");
 }
+
+static void disk_seed_write(void) { disk_seed_write_part(true); }
 
 /* ---------------------------------------------------------------------------
    Sniffer decoder
@@ -314,7 +329,7 @@ int main(void)
     t_origin = time_us_32();
     sleep_ms(50);                       /* core1 registers as flash lockout victim */
     bool need_seed = !disk_seeded();
-    if (need_seed) disk_seed_write();
+    if (need_seed) disk_seed_write_part(!disk_same_layout());
 
     uint32_t last_hb = 0, led_until = 0;
     bool was_connected = false;

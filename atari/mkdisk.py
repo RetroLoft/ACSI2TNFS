@@ -47,10 +47,14 @@ def fat16_partition(psize, files):
     rdlen = ROOT_ENTRIES * 32 // bps
     res = 1
     # FAT size: iterate until stable
+    # FAT type follows the cluster count (< 4085 = FAT12), because EmuTOS and
+    # DOS decide it that way; a small FAT16 volume is misread by them.
     spf = 1
     while True:
         ncl = (psize - res - 2 * spf - rdlen) // SPC
-        need = ((ncl + 2) * 2 + bps - 1) // bps
+        fat12 = ncl < 4085
+        fatbytes = ((ncl + 2) * 3 + 1) // 2 if fat12 else (ncl + 2) * 2
+        need = (fatbytes + bps - 1) // bps
         if need <= spf:
             break
         spf = need
@@ -65,12 +69,12 @@ def fat16_partition(psize, files):
     bs[0x26] = 0x29
     struct.pack_into("<I", bs, 0x27, 0x2026ac51)
     bs[0x2b:0x36] = b"ACSI2TNFS  "
-    bs[0x36:0x3e] = b"FAT16   "
+    bs[0x36:0x3e] = b"FAT12   " if fat12 else b"FAT16   "
     bs[510:512] = b"\x55\xaa"
     img[0:512] = bs
 
     fat = [0] * (ncl + 2)
-    fat[0], fat[1] = 0xfff8, 0xffff
+    fat[0], fat[1] = (0xff8, 0xfff) if fat12 else (0xfff8, 0xffff)
     rootdir = bytearray(rdlen * bps)
     tm, dt = dos_datetime(time.time())
     struct.pack_into("<11sB10xHHHI", rootdir, 0, b"ACSI2TNFS  ", 0x08, tm, dt, 0, 0)
@@ -83,20 +87,27 @@ def fat16_partition(psize, files):
         first = nextcl if data else 0
         for i in range(ncls):
             c = nextcl + i
-            fat[c] = c + 1 if i < ncls - 1 else 0xffff
+            fat[c] = c + 1 if i < ncls - 1 else (0xfff if fat12 else 0xffff)
             off = (datrec + (c - 2) * SPC) * bps
             chunk = data[i * SPC * bps:(i + 1) * SPC * bps]
             img[off:off + len(chunk)] = chunk
         nextcl += ncls
         struct.pack_into("<11sB10xHHHI", rootdir, ent * 32, n83, 0x00, tm, dt, first, len(data))
         ent += 1
-    fatb = struct.pack("<%dH" % len(fat), *fat)
+    if fat12:
+        fat += [0] * (len(fat) & 1)
+        fatb = bytearray()
+        for i in range(0, len(fat), 2):
+            v = fat[i] | (fat[i + 1] << 12)
+            fatb += bytes((v & 0xff, (v >> 8) & 0xff, v >> 16))
+    else:
+        fatb = struct.pack("<%dH" % len(fat), *fat)
     for k in range(2):
         off = (res + k * spf) * bps
         img[off:off + len(fatb)] = fatb
     off = (res + 2 * spf) * bps
     img[off:off + len(rootdir)] = rootdir
-    print(f"  FAT16: {psize} sectors, spf={spf}, rdlen={rdlen}, datrec={datrec}, clusters={ncl}, used={nextcl - 2}")
+    print(f"  FAT{12 if fat12 else 16}: {psize} sectors, spf={spf}, rdlen={rdlen}, datrec={datrec}, clusters={ncl}, used={nextcl - 2}")
     return img
 
 

@@ -317,7 +317,11 @@ init:   movem.l d0-d7/a0-a6,-(sp)
         sub.w   d5,d1
         divu    d3,d1
         move.w  d1,14(a1)               ; numcl
-        move.w  #1,16(a1)               ; bflags: 16-bit FAT
+        moveq   #0,d0                   ; bflags: FAT type from the cluster
+        cmp.w   #4085,d1                ; count, as EmuTOS and DOS decide it
+        blo.s   .f12
+        moveq   #1,d0                   ; 16-bit FAT
+.f12:   move.w  d0,16(a1)
 
         moveq   #0,d0                   ; shift = log2(bps/512)
         lsr.w   #8,d2

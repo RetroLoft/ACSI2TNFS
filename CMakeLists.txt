@@ -28,7 +28,12 @@ project(acsi2tnfs C CXX ASM)
 
 pico_sdk_init()
 
-add_executable(acsi2tnfs acsi2tnfs.c acsi_core1.c)
+add_executable(acsi2tnfs acsi2tnfs.c acsi_core1.c net.c)
+
+# Wi-Fi boards (pico_w, pico2_w): lwIP + CYW43, background mode on core0
+if (PICO_CYW43_SUPPORTED)
+    target_link_libraries(acsi2tnfs pico_cyw43_arch_lwip_threadsafe_background)
+endif()
 
 pico_generate_pio_header(acsi2tnfs ${CMAKE_CURRENT_LIST_DIR}/acsi_bus.pio)
 

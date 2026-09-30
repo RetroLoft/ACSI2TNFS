@@ -15,6 +15,7 @@
 #include "pico/bootrom.h"
 #include "hardware/flash.h"
 #include "hardware/watchdog.h"
+#include "hardware/clocks.h"
 #include "acsi.h"
 #include "disk_seed.h"
 
@@ -30,6 +31,12 @@ acsi_cfg_t g_cfg = { .mode = MODE_SNIFF, .acsi_id = 0, .verbose = true };
 #define CFG_MAGIC 0x41435349u   /* "ACSI" */
 typedef struct { uint32_t magic; uint8_t mode, id, verbose, pad; } cfg_flash_t;
 
+/* settings sector layout: [0] cfg_flash_t, [256] network settings (net.c) */
+#define CFG_NET_OFFSET 256
+#define CFG_BYTES      1024
+const void *net_settings_blob(uint32_t *len);
+void net_settings_load(const void *blob);
+
 static void cfg_load(void)
 {
     const cfg_flash_t *f = (const cfg_flash_t *)(XIP_BASE + CFG_FLASH_OFFSET);
@@ -37,20 +44,24 @@ static void cfg_load(void)
     if (f->mode <= MODE_TARGET) g_cfg.mode = f->mode;
     if (f->id <= 7) g_cfg.acsi_id = f->id;
     g_cfg.verbose = f->verbose != 0;
+    net_settings_load((const uint8_t *)f + CFG_NET_OFFSET);
 }
 
 static void cfg_write_cb(void *p)
 {
     flash_range_erase(CFG_FLASH_OFFSET, FLASH_SECTOR_SIZE);
-    flash_range_program(CFG_FLASH_OFFSET, (const uint8_t *)p, FLASH_PAGE_SIZE);
+    flash_range_program(CFG_FLASH_OFFSET, (const uint8_t *)p, CFG_BYTES);
 }
 
 void cfg_save(void)
 {
-    static uint8_t page[FLASH_PAGE_SIZE];
+    static uint8_t page[CFG_BYTES];        /* RAM: XIP is off while programming */
     cfg_flash_t f = { CFG_MAGIC, g_cfg.mode, g_cfg.acsi_id, g_cfg.verbose, 0 };
+    uint32_t nlen;
+    const void *net = net_settings_blob(&nlen);
     memset(page, 0xff, sizeof page);
     memcpy(page, &f, sizeof f);
+    memcpy(page + CFG_NET_OFFSET, net, nlen);
     int r = flash_safe_execute(cfg_write_cb, page, 1000);
     if (r != PICO_OK) printf("!! settings not saved (%d)\n", r);
 }
@@ -225,6 +236,8 @@ static void console(int ch)
     case 't': g_cfg.mode = MODE_TARGET; cfg_save(); printf("-> TARGET mode, id %u\n", g_cfg.acsi_id); break;
     case 'v': g_cfg.verbose = !g_cfg.verbose; cfg_save(); printf("verbose %s\n", g_cfg.verbose ? "on" : "off"); break;
     case 'i': info(); break;
+    case 'n': net_console_status(); break;
+    case 'N': printf("network test requested\n"); net_request_test(); break;
     case 'F': disk_seed_write(); break;
     case 'L': la_done = false; la_armed = true; printf("logic analyser armed (next WRITE)\n"); break;
     case 'l': {
@@ -284,9 +297,14 @@ static void console(int ch)
 
 int main(void)
 {
+#if PICO_RP2350
+    /* the PIO timing was validated on the Atari at 125 MHz (RP2040 default) */
+    set_sys_clock_khz(125000, true);
+#endif
     stdio_init_all();
     cfg_load();
     acsi_hw_init();
+    net_init();
 
     gpio_init(PIN_LED_PICO);
     gpio_set_dir(PIN_LED_PICO, GPIO_OUT);
@@ -325,13 +343,15 @@ int main(void)
         }
         was_connected = conn;
 
+        net_poll();
+
         int ch = getchar_timeout_us(0);
         if (ch >= 0) console(ch);
 
         if (g_cfg.save_req) { g_cfg.save_req = false; cfg_save(); }
         if (g_cfg.led_test) { g_cfg.led_test = false; led_until = now + 3000000; }
         if ((int32_t)(led_until - now) > 0) gpio_put(PIN_LED_PICO, (now / 150000) & 1);
-        else if (now - last_hb > 500000) {
+        else if (!BOARD_HAS_WIFI && now - last_hb > 500000) {  /* W: led shared with core1 */
             last_hb = now;
             gpio_put(PIN_LED_PICO, g_cfg.mode == MODE_TARGET ? 1 : !gpio_get(PIN_LED_PICO));
         }

@@ -17,7 +17,15 @@
 #define PIN_IRQ     21  /* high = /IRQ asserted (Q1)                          */
 #define PIN_DRQ     22  /* high = /DRQ asserted (Q2)                          */
 #define PIN_LED     28  /* PCB status led                                     */
+#ifdef CYW43_WL_GPIO_LED_PIN
+/* Pico W / Pico 2 W: the onboard led hangs on the Wi-Fi chip and GP25 is its
+   SPI chip select, so never touch GP25 there; use the PCB status led. */
+#define PIN_LED_PICO PIN_LED
+#define BOARD_HAS_WIFI 1
+#else
 #define PIN_LED_PICO 25 /* onboard led of the Pico (non-W)                    */
+#define BOARD_HAS_WIFI 0
+#endif
 
 /* bits in a 13-bit PIO sample (GP8..GP20) */
 #define S_DATA(s)   ((uint8_t)((s) & 0xff))
@@ -109,6 +117,14 @@ typedef struct {
 extern acsi_stats_t g_stats;
 
 void acsi_hw_init(void);
+
+/* network (net.c) - only functional on boards with Wi-Fi */
+void net_init(void);                                   /* core0, at start      */
+void net_poll(void);                                   /* core0, main loop     */
+void net_settings_from_atari(const uint8_t *blk512);   /* core1: vendor sub 3  */
+void net_request_test(void);                           /* core1: vendor sub 4  */
+uint32_t net_status_text(char *p, uint32_t max);       /* core1: info text     */
+void net_console_status(void);                         /* core0: 'n' command   */
 void core1_main(void);
 void cfg_save(void);
 const char *scsi_opname(uint8_t op);

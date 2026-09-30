@@ -1,5 +1,5 @@
 # build output
-build/
+build*/
 atari/out/
 
 # KiCad temporary / cache files

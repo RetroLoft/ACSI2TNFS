@@ -23,6 +23,19 @@
 
 #define FW_VERSION "0.2"
 
+#if PICO_RP2350
+#define BOARD_CHIP " 2"
+#define BOARD_MCU  " (RP2350"
+#else
+#define BOARD_CHIP ""
+#define BOARD_MCU  " (RP2040"
+#endif
+#if BOARD_HAS_WIFI
+#define BOARD_NAME BOARD_CHIP " W" BOARD_MCU ", Wi-Fi not used yet)"
+#else
+#define BOARD_NAME BOARD_CHIP BOARD_MCU ", no Wi-Fi)"
+#endif
+
 static PIO const pio = ACSI_PIO;
 static uint off_cs, off_ack, off_dout, off_din;
 
@@ -281,26 +294,6 @@ static uint8_t  rxcopy[4608];
 static uint8_t  wbuf[WBUF_SECTORS * 512];   /* one complete write transfer */
 static uint32_t rx_n;
 
-static bool __not_in_flash_func(dma_in_chunk)(uint8_t *buf, uint32_t len)
-{
-    uint32_t t0 = time_us_32();
-    for (uint32_t i = 0; i < len; ) {
-        ack_drain(&acks);
-        if (!pio_sm_is_rx_fifo_empty(pio, SM_DIN)) {
-            uint8_t v = (uint8_t)pio->rxf[SM_DIN];
-            buf[i++] = v;
-            if (rx_n < sizeof rxcopy) rxcopy[rx_n++] = v;
-            t0 = time_us_32();
-            continue;
-        }
-        if (reset_active()) { res = RES_RESET; return false; }
-        if (time_us_32() - t0 > 1000000) { res = RES_TIMEOUT; return false; }
-    }
-    /* let the sampler catch the last strobe */
-    busy_wait_us_32(2);
-    ack_drain(&acks);
-    return true;
-}
 
 /* Status phase: put status on the bus, raise /IRQ, wait for the /CS read. */
 static bool __not_in_flash_func(status_phase)(uint8_t st)
@@ -400,22 +393,15 @@ static uint8_t read_sectors(uint32_t lba, uint32_t n)
     return 0x00;
 }
 
-static uint8_t write_sectors(uint32_t lba, uint32_t n)
+/*
+ * DMA: Atari -> device, whole transfer into buf.
+ * RP2040 DMA first, THEN the state machine: the SM must never stall on a full
+ * FIFO, because the real /DRQ line stays low for ~1 us after we release it
+ * (slow BC547) and the ST keeps sending bytes during that time.
+ */
+static bool dma_in(uint8_t *buf, uint32_t len)
 {
-    if (lba + n > DISK_SECTORS || lba + n < lba) {
-        set_sense(0x21, 0x05, 0x21);
-        return 0x02;
-    }
-    if (n > WBUF_SECTORS) {             /* larger than our RAM buffer */
-        set_sense(0x24, 0x05, 0x24);
-        return 0x02;
-    }
-    /* 1. receive the whole transfer into RAM, FIFO emptied by RP2040 DMA */
-    const uint32_t len = n * 512u;
     if (la_armed) { la_armed = false; la_start(); la_done = true; }
-    /* DMA first, THEN the state machine: the SM must never stall on a full
-       FIFO, because the real /DRQ line stays low for ~1 us after we release
-       it (slow BC547) and the ST keeps sending bytes during that time. */
     pio_sm_set_enabled(pio, SM_DIN, false);
     pio_sm_clear_fifos(pio, SM_DIN);
     dma_channel_config c = dma_channel_get_default_config(dch_a);
@@ -423,7 +409,7 @@ static uint8_t write_sectors(uint32_t lba, uint32_t n)
     channel_config_set_read_increment(&c, false);
     channel_config_set_write_increment(&c, true);
     channel_config_set_dreq(&c, pio_get_dreq(pio, SM_DIN, false));
-    dma_channel_configure(dch_a, &c, wbuf, &pio->rxf[SM_DIN], len, true);
+    dma_channel_configure(dch_a, &c, buf, &pio->rxf[SM_DIN], len, true);
     sm_start(SM_DIN, off_din + acsi_din_offset_start);
 
     bool ok = true;
@@ -439,9 +425,24 @@ static uint8_t write_sectors(uint32_t lba, uint32_t n)
     ack_drain(&acks);
     if (!ok) dma_channel_abort(dch_a);
     sm_stop(SM_DIN);
-    rx_n = len < sizeof rxcopy ? len : sizeof rxcopy;   /* for the /ACK cross-check */
-    memcpy(rxcopy, wbuf, rx_n);
-    if (!ok) return 0x02;
+    rx_n = len < sizeof rxcopy ? len : sizeof rxcopy;
+    memcpy(rxcopy, buf, rx_n);
+    return ok;
+}
+
+static uint8_t write_sectors(uint32_t lba, uint32_t n)
+{
+    if (lba + n > DISK_SECTORS || lba + n < lba) {
+        set_sense(0x21, 0x05, 0x21);
+        return 0x02;
+    }
+    if (n > WBUF_SECTORS) {             /* larger than our RAM buffer */
+        set_sense(0x24, 0x05, 0x24);
+        return 0x02;
+    }
+    /* 1. receive the whole transfer into RAM */
+    const uint32_t len = n * 512u;
+    if (!dma_in(wbuf, len)) return 0x02;
 
     /* 2. only now touch the flash (the Atari waits for the status byte) */
     for (uint32_t i = 0; i < n; i++, lba++) {
@@ -460,7 +461,7 @@ static uint8_t write_sectors(uint32_t lba, uint32_t n)
 /* ---------------------------------------------------------------------------
    Command execution
 --------------------------------------------------------------------------- */
-static uint8_t reply[512];
+static uint8_t reply[1024];
 
 static uint8_t send_reply(uint32_t len)
 {
@@ -472,7 +473,7 @@ static uint32_t info_text(char *p, uint32_t max)
     uint32_t up = time_us_32() / 1000000u;
     int n = snprintf(p, max,
         "ACSI2TNFS firmware " FW_VERSION " (" __DATE__ " " __TIME__ ")\r\n"
-        "Board      : Raspberry Pi Pico (RP2040), no Wi-Fi\r\n"
+        "Board      : Raspberry Pi Pico" BOARD_NAME "\r\n"
         "ACSI id    : %u%s\r\n"
         "Disk       : %u sectors (%u KB) in Pico flash\r\n"
         "Uptime     : %lu:%02lu:%02lu\r\n"
@@ -485,7 +486,10 @@ static uint32_t info_text(char *p, uint32_t max)
         (unsigned long)g_stats.commands,
         (unsigned long)g_stats.sectors_read, (unsigned long)g_stats.sectors_written,
         (unsigned long)g_stats.errors, (unsigned long)g_stats.ack_mismatch);
-    return n < 0 ? 0 : (uint32_t)n;
+    if (n < 0) return 0;
+    if (BOARD_HAS_WIFI && (uint32_t)n < max)
+        n += (int)net_status_text(p + n, max - (uint32_t)n);
+    return (uint32_t)n < max ? (uint32_t)n : max - 1;
 }
 
 static uint8_t exec_cmd(const uint8_t *cdb, uint8_t cdb_len, uint32_t *bytes)
@@ -574,21 +578,17 @@ static uint8_t exec_cmd(const uint8_t *cdb, uint8_t cdb_len, uint32_t *bytes)
 
     case 0x15:  /* MODE SELECT(6): accept and ignore parameter list */
         len = c[4];
-        if (len) {
-            sm_start(SM_DIN, off_din + acsi_din_offset_start);
-            bool ok = dma_in_chunk(reply, len);
-            sm_stop(SM_DIN);
-            if (!ok) return 0x02;
-        }
+        if (len && !dma_in(reply, len)) return 0x02;
         *bytes = len;
         return 0x00;
 
     case 0x11:  /* vendor: [0x11|id, 'A', 'T', sub, len/arg, 0] */
         if (ext || c[1] != 'A' || c[2] != 'T') break;
         switch (c[3]) {
-        case 0:     /* info text, NUL terminated */
-            len = c[4] ? c[4] : 256;
+        case 0:     /* info text, NUL terminated (arg 0 = 1024 bytes) */
+            len = c[4] ? c[4] : 1024;
             info_text((char *)reply, sizeof reply);
+            reply[sizeof reply - 1] = 0;
             *bytes = len;
             return send_reply(len);
         case 1:     /* blink the led */
@@ -597,6 +597,17 @@ static uint8_t exec_cmd(const uint8_t *cdb, uint8_t cdb_len, uint32_t *bytes)
         case 2:     /* set ACSI id (applied at next Atari reset) */
             if (c[4] > 7) break;
             pending_id = c[4];
+            return 0x00;
+        case 3:     /* network settings: 512 bytes "SSID\0PASS\0SERVER\0PATH\0",
+                       an empty field keeps the current value */
+            if (!BOARD_HAS_WIFI) break;
+            if (!dma_in(reply, 512)) return 0x02;
+            *bytes = 512;
+            net_settings_from_atari(reply);
+            return 0x00;
+        case 4:     /* (re)connect Wi-Fi and test the TNFS server */
+            if (!BOARD_HAS_WIFI) break;
+            net_request_test();
             return 0x00;
         }
         break;
@@ -770,6 +781,11 @@ void acsi_hw_init(void)
     gpio_init(PIN_DRQ); gpio_put(PIN_DRQ, 0); gpio_set_dir(PIN_DRQ, GPIO_OUT);
 
     gpio_init(PIN_LED); gpio_put(PIN_LED, 0); gpio_set_dir(PIN_LED, GPIO_OUT);
+
+    /* claim our state machines so the Wi-Fi driver (CYW43 uses a PIO SM for
+       its SPI bus) picks a different one */
+    for (uint sm = 0; sm < 4; sm++) pio_sm_claim(pio, sm);
+    pio_sm_claim(pio1, 0);
 
     off_cs   = pio_add_program(pio, &acsi_cs_program);
     off_ack  = pio_add_program(pio, &acsi_ack_program);

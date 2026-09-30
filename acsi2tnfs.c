@@ -29,7 +29,7 @@ acsi_cfg_t g_cfg = { .mode = MODE_SNIFF, .acsi_id = 0, .verbose = true };
    Settings in the last flash sector
 --------------------------------------------------------------------------- */
 #define CFG_MAGIC 0x41435349u   /* "ACSI" */
-typedef struct { uint32_t magic; uint8_t mode, id, verbose, pad; } cfg_flash_t;
+typedef struct { uint32_t magic; uint8_t mode, id, verbose, hidden; } cfg_flash_t;
 
 /* settings sector layout: [0] cfg_flash_t, [256] network settings (net.c) */
 #define CFG_NET_OFFSET 256
@@ -45,6 +45,7 @@ static void cfg_load(void)
     if (f->mode <= MODE_TARGET) g_cfg.mode = f->mode;
     if (f->id <= 7) g_cfg.acsi_id = f->id;
     g_cfg.verbose = f->verbose != 0;
+    g_cfg.hidden = f->hidden == 1;      /* was padding (0) before */
 }
 
 static void cfg_write_cb(void *p)
@@ -56,7 +57,7 @@ static void cfg_write_cb(void *p)
 void cfg_save(void)
 {
     static uint8_t page[CFG_BYTES];        /* RAM: XIP is off while programming */
-    cfg_flash_t f = { CFG_MAGIC, g_cfg.mode, g_cfg.acsi_id, g_cfg.verbose, 0 };
+    cfg_flash_t f = { CFG_MAGIC, g_cfg.mode, g_cfg.acsi_id, g_cfg.verbose, g_cfg.hidden };
     uint32_t nlen;
     const void *net = net_settings_blob(&nlen);
     memset(page, 0xff, sizeof page);
@@ -227,9 +228,10 @@ static void target_event(const acsi_event_t *e)
 --------------------------------------------------------------------------- */
 static void help(void)
 {
-    printf("\nACSI2TNFS console. mode=%s id=%u verbose=%s\n",
-           g_cfg.mode == MODE_SNIFF ? "SNIFF" : "TARGET", g_cfg.acsi_id, g_cfg.verbose ? "on" : "off");
-    printf("  s=sniffer  t=target  0-7=ACSI id  v=verbose  i=info  B=bootsel  h=help\n\n");
+    printf("\nACSI2TNFS console. mode=%s id=%u verbose=%s%s\n",
+           g_cfg.mode == MODE_SNIFF ? "SNIFF" : "TARGET", g_cfg.acsi_id, g_cfg.verbose ? "on" : "off",
+           g_cfg.hidden ? "  ** HIDDEN from the Atari **" : "");
+    printf("  s=sniffer  t=target  0-7=ACSI id  v=verbose  H=hide/show  i=info  B=bootsel  h=help\n\n");
 }
 
 static void info(void)
@@ -250,6 +252,12 @@ static void console(int ch)
     case 's': g_cfg.mode = MODE_SNIFF;  cfg_save(); printf("-> SNIFF mode\n"); break;
     case 't': g_cfg.mode = MODE_TARGET; cfg_save(); printf("-> TARGET mode, id %u\n", g_cfg.acsi_id); break;
     case 'v': g_cfg.verbose = !g_cfg.verbose; cfg_save(); printf("verbose %s\n", g_cfg.verbose ? "on" : "off"); break;
+    case 'H':
+        g_cfg.hidden = !g_cfg.hidden;
+        cfg_save();
+        printf(g_cfg.hidden ? "-> HIDDEN: the Atari sees no device on id %u from its next boot, reset it now\n"
+                            : "-> VISIBLE again on id %u, reset the Atari to boot from it\n", g_cfg.acsi_id);
+        break;
     case 'i': info(); break;
     case 'n': net_console_status(); break;
     case 'N': printf("network test requested\n"); net_request_test(); break;

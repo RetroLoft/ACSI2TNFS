@@ -824,6 +824,8 @@ static void __not_in_flash_func(target_loop)(void)
         }
         if (s & (S_RW | S_A1)) continue;            /* not a command start */
         if ((S_DATA(s) >> 5) != g_cfg.acsi_id) continue;
+        /* hidden: no /IRQ, so TOS and hard disk drivers see an empty id */
+        if (g_cfg.hidden && (S_DATA(s) & 0x1f) != 0x11) continue;
         handle_command(s);
     }
 }

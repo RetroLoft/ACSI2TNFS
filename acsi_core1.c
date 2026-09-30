@@ -23,11 +23,13 @@
 
 #define FW_VERSION FW_VERSION_STR
 
-#if BOARD_HAS_WIFI
-#define TOTAL_SECTORS (VFAT_START + VFAT_SECTORS)
-#else
-#define TOTAL_SECTORS DISK_SECTORS
-#endif
+/* disk size: flash disk, then one virtual partition per TNFS drive */
+static uint32_t total_sectors(void)
+{
+    uint32_t nv = net_vdrives();
+    return nv ? VFAT_START + (nv - 1) * VFAT_STRIDE + VFAT_SECTORS : DISK_SECTORS;
+}
+#define TOTAL_SECTORS total_sectors()
 
 #if PICO_RP2350
 #define BOARD_CHIP " 2"
@@ -376,19 +378,23 @@ static const uint8_t *root_sector(void)
     for (int i = 0; i < 512; i += 2) sum += (sector_buf[i] << 8) | sector_buf[i + 1];
     if (sum == 0x1234) {
         sector_buf[ROOT_ID_OFFSET] = g_cfg.acsi_id;
-#if BOARD_HAS_WIFI
-        /* second partition: the virtual FAT on the TNFS server */
-        uint8_t *pe = sector_buf + 0x1c6 + 12;
-        pe[0] = 0x01;                                   /* exists, not bootable */
-        memcpy(pe + 1, "GEM", 3);
-        pe[4] = VFAT_START >> 24;   pe[5] = VFAT_START >> 16;
-        pe[6] = VFAT_START >> 8;    pe[7] = VFAT_START & 0xff;
-        pe[8] = VFAT_SECTORS >> 24; pe[9] = VFAT_SECTORS >> 16;
-        pe[10] = VFAT_SECTORS >> 8; pe[11] = VFAT_SECTORS & 0xff;
-        uint32_t total = VFAT_START + VFAT_SECTORS;     /* hd_siz */
-        sector_buf[0x1c2] = total >> 24; sector_buf[0x1c3] = total >> 16;
-        sector_buf[0x1c4] = total >> 8;  sector_buf[0x1c5] = total & 0xff;
-#endif
+        /* partitions 2..4: the virtual FATs on the TNFS servers */
+        uint32_t nv = net_vdrives();
+        for (uint32_t k = 0; k < nv; k++) {
+            uint8_t *pe = sector_buf + 0x1c6 + 12 * (1 + k);
+            uint32_t st = VFAT_START + k * VFAT_STRIDE;
+            pe[0] = 0x01;                               /* exists, not bootable */
+            memcpy(pe + 1, "GEM", 3);
+            pe[4] = st >> 24;           pe[5] = st >> 16;
+            pe[6] = st >> 8;            pe[7] = st & 0xff;
+            pe[8] = VFAT_SECTORS >> 24; pe[9] = VFAT_SECTORS >> 16;
+            pe[10] = VFAT_SECTORS >> 8; pe[11] = VFAT_SECTORS & 0xff;
+        }
+        if (nv) {
+            uint32_t total = TOTAL_SECTORS;             /* hd_siz */
+            sector_buf[0x1c2] = total >> 24; sector_buf[0x1c3] = total >> 16;
+            sector_buf[0x1c4] = total >> 8;  sector_buf[0x1c5] = total & 0xff;
+        }
         sum = 0;
         for (int i = 0; i < 510; i += 2) sum += (sector_buf[i] << 8) | sector_buf[i + 1];
         uint16_t fix = (uint16_t)(0x1234 - sum);
@@ -401,12 +407,13 @@ static const uint8_t *root_sector(void)
 static uint8_t read_sectors(uint32_t lba, uint32_t n)
 {
     if (BOARD_HAS_WIFI && lba >= VFAT_START) {         /* virtual TNFS partition */
-        uint32_t rel = lba - VFAT_START;
-        if (rel + n > VFAT_SECTORS || n > WBUF_SECTORS) {
+        uint32_t drive = (lba - VFAT_START) / VFAT_STRIDE;
+        uint32_t rel = (lba - VFAT_START) % VFAT_STRIDE;
+        if (drive >= net_vdrives() || rel + n > VFAT_SECTORS || n > WBUF_SECTORS) {
             set_sense(0x21, 0x05, 0x21);
             return 0x02;
         }
-        if (!net_vread(rel, n, wbuf)) {
+        if (!net_vread(drive, rel, n, wbuf)) {
             set_sense(0x11, 0x03, 0x11);                /* unrecoverable read error */
             return 0x02;
         }

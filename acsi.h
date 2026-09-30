@@ -55,6 +55,10 @@
    16 MB: TOS 1.x Rwabs sector numbers are signed 16-bit (512-byte sectors). */
 #define VFAT_START          4096u
 #define VFAT_SECTORS        32760u
+/* One partition per TNFS drive, every VFAT_STRIDE sectors from VFAT_START.
+   The root sector has 4 entries: C: plus up to 3 TNFS drives. */
+#define VFAT_STRIDE         32768u
+#define VDRIVES_MAX         3
 
 /* Root sector: byte holding the ACSI id (patched by the firmware at runtime) */
 #define ROOT_ID_OFFSET      2
@@ -133,7 +137,8 @@ void net_poll(void);                                   /* core0, main loop     *
 void net_settings_from_atari(const uint8_t *blk512);   /* core1: vendor sub 3  */
 void net_request_test(void);                           /* core1: vendor sub 4  */
 uint32_t net_status_text(char *p, uint32_t max);       /* core1: info text     */
-bool net_vread(uint32_t rel, uint32_t n, uint8_t *buf); /* core1: virtual part.  */
+uint32_t net_vdrives(void);                            /* TNFS partitions (fixed after start-up) */
+bool net_vread(uint32_t drive, uint32_t rel, uint32_t n, uint8_t *buf); /* core1: virtual part. */
 void vfat_bootsector(uint8_t *b);
 
 /* SideTNFS configuration protocol over ACSI (config.c) */

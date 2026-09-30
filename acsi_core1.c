@@ -21,7 +21,13 @@
 #include "acsi.h"
 #include "acsi_bus.pio.h"
 
-#define FW_VERSION "0.2"
+#define FW_VERSION "0.3"
+
+#if BOARD_HAS_WIFI
+#define TOTAL_SECTORS (VFAT_START + VFAT_SECTORS)
+#else
+#define TOTAL_SECTORS DISK_SECTORS
+#endif
 
 #if PICO_RP2350
 #define BOARD_CHIP " 2"
@@ -368,6 +374,19 @@ static const uint8_t *root_sector(void)
     for (int i = 0; i < 512; i += 2) sum += (sector_buf[i] << 8) | sector_buf[i + 1];
     if (sum == 0x1234) {
         sector_buf[ROOT_ID_OFFSET] = g_cfg.acsi_id;
+#if BOARD_HAS_WIFI
+        /* second partition: the virtual FAT on the TNFS server */
+        uint8_t *pe = sector_buf + 0x1c6 + 12;
+        pe[0] = 0x01;                                   /* exists, not bootable */
+        memcpy(pe + 1, "GEM", 3);
+        pe[4] = VFAT_START >> 24;   pe[5] = VFAT_START >> 16;
+        pe[6] = VFAT_START >> 8;    pe[7] = VFAT_START & 0xff;
+        pe[8] = VFAT_SECTORS >> 24; pe[9] = VFAT_SECTORS >> 16;
+        pe[10] = VFAT_SECTORS >> 8; pe[11] = VFAT_SECTORS & 0xff;
+        uint32_t total = VFAT_START + VFAT_SECTORS;     /* hd_siz */
+        sector_buf[0x1c2] = total >> 24; sector_buf[0x1c3] = total >> 16;
+        sector_buf[0x1c4] = total >> 8;  sector_buf[0x1c5] = total & 0xff;
+#endif
         sum = 0;
         for (int i = 0; i < 510; i += 2) sum += (sector_buf[i] << 8) | sector_buf[i + 1];
         uint16_t fix = (uint16_t)(0x1234 - sum);
@@ -379,6 +398,20 @@ static const uint8_t *root_sector(void)
 
 static uint8_t read_sectors(uint32_t lba, uint32_t n)
 {
+    if (BOARD_HAS_WIFI && lba >= VFAT_START) {         /* virtual TNFS partition */
+        uint32_t rel = lba - VFAT_START;
+        if (rel + n > VFAT_SECTORS || n > WBUF_SECTORS) {
+            set_sense(0x21, 0x05, 0x21);
+            return 0x02;
+        }
+        if (!net_vread(rel, n, wbuf)) {
+            set_sense(0x11, 0x03, 0x11);                /* unrecoverable read error */
+            return 0x02;
+        }
+        if (!dma_out2(wbuf, n * 512u, NULL, 0)) return 0x02;
+        g_stats.sectors_read += n;
+        return 0x00;
+    }
     if (lba + n > DISK_SECTORS || lba + n < lba) {
         set_sense(0x21, 0x05, 0x21);
         return 0x02;
@@ -432,6 +465,10 @@ static bool dma_in(uint8_t *buf, uint32_t len)
 
 static uint8_t write_sectors(uint32_t lba, uint32_t n)
 {
+    if (BOARD_HAS_WIFI && lba >= VFAT_START) {         /* TNFS drive is read-only (for now) */
+        set_sense(0x03, 0x07, 0x27);                    /* data protect / write protected */
+        return 0x02;
+    }
     if (lba + n > DISK_SECTORS || lba + n < lba) {
         set_sense(0x21, 0x05, 0x21);
         return 0x02;
@@ -548,8 +585,8 @@ static uint8_t exec_cmd(const uint8_t *cdb, uint8_t cdb_len, uint32_t *bytes)
 
     case 0x25:  /* READ CAPACITY(10) */
         if (!ext) break;
-        reply[0] = (DISK_SECTORS - 1) >> 24; reply[1] = (DISK_SECTORS - 1) >> 16;
-        reply[2] = (DISK_SECTORS - 1) >> 8;  reply[3] = (DISK_SECTORS - 1) & 0xff;
+        reply[0] = (TOTAL_SECTORS - 1) >> 24; reply[1] = (TOTAL_SECTORS - 1) >> 16;
+        reply[2] = (TOTAL_SECTORS - 1) >> 8;  reply[3] = (TOTAL_SECTORS - 1) & 0xff;
         reply[6] = 0x02;                        /* 512 byte blocks */
         *bytes = 8;
         return send_reply(8);
@@ -571,7 +608,7 @@ static uint8_t exec_cmd(const uint8_t *cdb, uint8_t cdb_len, uint32_t *bytes)
         len = c[4];
         reply[0] = 11;
         reply[3] = 8;
-        reply[5] = DISK_SECTORS >> 16; reply[6] = DISK_SECTORS >> 8; reply[7] = DISK_SECTORS & 0xff;
+        reply[5] = TOTAL_SECTORS >> 16; reply[6] = TOTAL_SECTORS >> 8; reply[7] = TOTAL_SECTORS & 0xff;
         reply[10] = 0x02;
         *bytes = len;
         return len ? send_reply(len) : 0x00;

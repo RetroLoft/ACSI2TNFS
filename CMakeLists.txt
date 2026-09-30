@@ -41,6 +41,7 @@ target_compile_definitions(acsi2tnfs PRIVATE
     PICO_STDIO_USB_ENABLE_RESET_VIA_BAUD_RATE=1
     PICO_STDIO_USB_ENABLE_RESET_VIA_VENDOR_INTERFACE=1
     PICO_STDIO_USB_CONNECT_WAIT_TIMEOUT_MS=0
+    PICO_STACK_SIZE=0x1000
 )
 
 pico_set_program_name(acsi2tnfs "acsi2tnfs")

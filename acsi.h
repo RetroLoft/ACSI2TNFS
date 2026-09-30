@@ -51,6 +51,11 @@
 #define DISK_SECTORS        3064u
 #define CFG_FLASH_OFFSET    0x1FF000u
 
+/* Virtual FAT16 partition backed by the TNFS server (Wi-Fi boards only).
+   16 MB: TOS 1.x Rwabs sector numbers are signed 16-bit (512-byte sectors). */
+#define VFAT_START          4096u
+#define VFAT_SECTORS        32760u
+
 /* Root sector: byte holding the ACSI id (patched by the firmware at runtime) */
 #define ROOT_ID_OFFSET      2
 
@@ -124,6 +129,8 @@ void net_poll(void);                                   /* core0, main loop     *
 void net_settings_from_atari(const uint8_t *blk512);   /* core1: vendor sub 3  */
 void net_request_test(void);                           /* core1: vendor sub 4  */
 uint32_t net_status_text(char *p, uint32_t max);       /* core1: info text     */
+bool net_vread(uint32_t rel, uint32_t n, uint8_t *buf); /* core1: virtual part.  */
+void vfat_bootsector(uint8_t *b);
 void net_console_status(void);                         /* core0: 'n' command   */
 void core1_main(void);
 void cfg_save(void);

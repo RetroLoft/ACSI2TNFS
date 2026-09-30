@@ -11,6 +11,8 @@ HDV_RW      equ $476
 HDV_MEDIACH equ $47e
 DRVBITS     equ $4c2
 BOOTDEV     equ $446
+RESVALID    equ $426
+RESVECTOR   equ $42a
 MAXPART     equ 4
 CHUNK       equ 64                      ; sectors per ACSI command
 
@@ -27,6 +29,8 @@ firstdrv:   dc.w    0
 old_bpb:    dc.l    0
 old_rw:     dc.l    0
 old_mc:     dc.l    0
+old_resvalid: dc.l   0
+old_resvec: dc.l    0
 pstart:     ds.l    MAXPART             ; physical start sector
 pshift:     ds.w    MAXPART             ; log2(logical/physical sector size)
 bpbs:       ds.w    9*MAXPART           ; TOS BPBs, 18 bytes each
@@ -67,6 +71,18 @@ my_mc:  move.w  4(sp),d0
         rts
 .old:   move.l  old_mc(pc),a0
         jmp     (a0)
+
+; resvector: TOS calls this early in every warm reset, before GEMDOS starts.
+; _bootdev still says C: from this session and GEMDOS would take it as its
+; current drive even when the adapter is hidden (no driver, no C:) on the
+; next boot. Put A: back, as after a cold boot, then hand the vector back to
+; whoever had it before us and continue at a6 (TOS re-tests resvalid there).
+; No stack is available here.
+my_reset:
+        clr.w   BOOTDEV.w
+        move.l  old_resvalid(pc),RESVALID.w
+        move.l  old_resvec(pc),RESVECTOR.w
+        jmp     (a6)
 
 ; LONG hdv_rw(WORD rw, void *buf, WORD count, WORD recno, WORD dev, LONG lrecno)
 my_rw:  move.w  14(sp),d0
@@ -372,6 +388,13 @@ init:   movem.l d0-d7/a0-a6,-(sp)
         move.l  HDV_MEDIACH.w,(a0)
         lea     my_mc(pc),a1
         move.l  a1,HDV_MEDIACH.w
+        lea     old_resvalid(pc),a0
+        move.l  RESVALID.w,(a0)
+        lea     old_resvec(pc),a0
+        move.l  RESVECTOR.w,(a0)
+        lea     my_reset(pc),a1
+        move.l  a1,RESVECTOR.w
+        move.l  #$31415926,RESVALID.w
 
         lea     msg_ok(pc),a0
         move.w  firstdrv(pc),d0

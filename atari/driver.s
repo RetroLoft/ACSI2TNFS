@@ -349,9 +349,16 @@ init:   movem.l d0-d7/a0-a6,-(sp)
         dbra    d2,.bits
         move.l  d0,DRVBITS.w
 
-        ; boot from the first hard disk partition like AHDI does: TOS runs
-        ; the AUTO folder and reads DESKTOP.INF from _bootdev (else A:)
+        ; boot from our first partition, like HDDRIVER does. GEMDOS already
+        ; picked its current drive from _bootdev before the floppy and hard
+        ; disk boot (xsetdrv(bootdev) in osinit; _bootdev is still A: after
+        ; a cold boot), and the AUTO folder and the desktop inherit that
+        ; drive, so set both.
         move.w  firstdrv(pc),BOOTDEV.w
+        move.w  firstdrv(pc),-(sp)
+        move.w  #$0e,-(sp)              ; Dsetdrv
+        trap    #1
+        addq.l  #4,sp
 
         lea     old_bpb(pc),a0
         move.l  HDV_BPB.w,(a0)

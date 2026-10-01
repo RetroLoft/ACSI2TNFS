@@ -76,7 +76,6 @@ typedef struct {
     volatile uint8_t mode;       /* requested mode                        */
     volatile uint8_t acsi_id;    /* our ACSI controller number (0..7)     */
     volatile bool    verbose;    /* log every command in target mode      */
-    volatile bool    led_test;   /* blink request from CONFIG.TOS         */
     volatile bool    save_req;   /* core1 asks core0 to store settings    */
     volatile bool    hidden;     /* act as if unplugged: answer only our own
                                     vendor command ($11 'AT'), nothing else */
@@ -142,9 +141,8 @@ void acsi_hw_init(void);
 /* network (net.c) - only functional on boards with Wi-Fi */
 void net_init(void);                                   /* core0, at start      */
 void net_poll(void);                                   /* core0, main loop     */
-void net_settings_from_atari(const uint8_t *blk512);   /* core1: vendor sub 3  */
-void net_request_test(void);                           /* core1: vendor sub 4  */
-uint32_t net_status_text(char *p, uint32_t max);       /* core1: info text     */
+void net_request_test(void);                           /* console N: reconnect */
+uint32_t net_status_text(char *p, uint32_t max);       /* console n            */
 uint32_t net_vdrives(void);                            /* TNFS partitions (fixed after start-up) */
 uint8_t net_vdrive_letter(uint32_t k);                 /* wanted letter of partition k, 0 = any */
 void net_clock(uint8_t *out);                          /* core1: vendor sub 9 (network time) */
@@ -162,7 +160,6 @@ void vfat_bootsector(uint8_t *b);
 void cfgrpc_request(const uint8_t *blk512);   /* core1: vendor sub 5 */
 void cfgrpc_response(uint8_t *out512);        /* core1: vendor sub 6 */
 void cfgrpc_poll(void);                       /* core0: main loop    */
-void cfgrpc_debug(const uint8_t *blk512);     /* core1: vendor sub 7 */
 void net_console_status(void);                         /* core0: 'n' command   */
 void core1_main(void);
 void cfg_save(void);

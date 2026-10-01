@@ -33,7 +33,6 @@ typedef struct {
 static net_settings_t g_net = {
     NET_MAGIC, "", "", "", "/", 16384
 };
-static int g_net_drive = -1;            /* first TNFS slot (CONFIG.TOS option 3) */
 
 settings_t g_set, g_stage;
 
@@ -59,14 +58,12 @@ static void settings_to_runtime(void)
     snprintf(g_net.pass, sizeof g_net.pass, "%s", g_set.pass);
     g_net.port = 16384;
     strcpy(g_net.path, "/");
-    g_net_drive = -1;
     for (int i = 0; i < SET_MAX_DRIVES; i++) {
         const set_drive_t *d = &g_set.drv[i];
         if (d->state != DRV_ENABLED || d->type != DRV_TYPE_TNFS) continue;
         snprintf(g_net.server, sizeof g_net.server, "%s", d->host);
         snprintf(g_net.path, sizeof g_net.path, "%s", d->mount_path[0] ? d->mount_path : "/");
         g_net.port = d->port ? d->port : 16384;
-        g_net_drive = i;
         break;
     }
     drives_from_settings();
@@ -111,17 +108,8 @@ void net_settings_load(const void *blob)
 static char wifi_status[80] = "not configured";
 
 static volatile bool test_req;
-static volatile bool cfg_new;
-static uint8_t cfg_blk[512];
 
 extern acsi_cfg_t g_cfg;
-
-/* core1 -> core0 hand-over */
-void net_settings_from_atari(const uint8_t *blk512)
-{
-    memcpy(cfg_blk, blk512, sizeof cfg_blk);
-    cfg_new = true;
-}
 
 void net_request_test(void) { test_req = true; }
 
@@ -305,7 +293,7 @@ bool net_vread(uint32_t drive, uint32_t rel, uint32_t n, uint8_t *buf)
 
 bool net_link_up(void) { return false; }
 void net_init(void) { clk_state = g_set.rtc_enabled ? CLK_NONE : CLK_OFF; clock_restore(); }
-void net_poll(void) { cfg_new = false; test_req = false; }
+void net_poll(void) { test_req = false; }
 static void drives_from_settings(void) { }
 uint32_t net_vdrives(void) { return 0; }
 uint8_t net_vdrive_letter(uint32_t k) { (void)k; return 0; }
@@ -332,47 +320,12 @@ bool net_link_up(void)
     return wifi_inited && cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA) == CYW43_LINK_UP;
 }
 
-/* apply "SSID\0PASS\0SERVER\0PATH\0" from the Atari; empty = keep */
-static void apply_cfg_block(void)
-{
-    const char *f[4];
-    const char *q = (const char *)cfg_blk, *end = q + sizeof cfg_blk;
-    for (int i = 0; i < 4; i++) {
-        f[i] = q;
-        while (q < end && *q) q++;
-        if (q < end) q++;
-    }
-    /* CONFIG.TOS option 3: Wi-Fi + the first TNFS drive, applied at once */
-    set_drive_t *drv = &g_stage.drv[g_net_drive >= 0 ? g_net_drive : 0];
-    struct { char *dst; size_t sz; } d[4] = {
-        { g_stage.ssid, 33 }, { g_stage.pass, 65 },
-        { drv->host, sizeof drv->host }, { drv->mount_path, sizeof drv->mount_path } };
-    for (int i = 0; i < 4; i++) {
-        if (f[i] >= end || !*f[i]) continue;
-        strncpy(d[i].dst, f[i], d[i].sz - 1);
-        d[i].dst[d[i].sz - 1] = 0;
-    }
-    if (drv->host[0] && drv->state == DRV_EMPTY) {
-        drv->state = DRV_ENABLED;
-        drv->type = DRV_TYPE_TNFS;
-        drv->letter = 'D';
-        drv->port = 16384;
-        if (!drv->mount_path[0]) strcpy(drv->mount_path, "/");
-        snprintf(drv->nickname, sizeof drv->nickname, "TNFS");
-    }
-    g_set = g_stage;
-    settings_to_runtime();
-    printf("net: settings from Atari: ssid '%s', server %s, path %s\n",
-           g_net.ssid, g_net.server, g_net.path);
-    cfg_save();
-}
-
 /* ---------------- Wi-Fi ---------------- */
 
 static bool wifi_connect(void)
 {
     if (!g_net.ssid[0]) {
-        snprintf(wifi_status, sizeof wifi_status, "no SSID set (CONFIG.TOS option 3)");
+        snprintf(wifi_status, sizeof wifi_status, "no SSID set (ACSITNFS.PRG: Config)");
         return false;
     }
     if (!wifi_inited) {
@@ -1212,7 +1165,7 @@ static void drives_down(void)
     cur = NULL;
 }
 
-/* connect, mount and scan every drive: at start-up and by CONFIG.TOS option 4 */
+/* connect, mount and scan every drive: at start-up and by console N */
 static void tnfs_connect_and_scan(void)
 {
     drives_down();
@@ -1283,13 +1236,6 @@ void net_poll(void)
             clk_state = CLK_NONE;   /* the driver stops waiting */
         ntp_next = make_timeout_time_ms(ok ? NTP_RESYNC_MS :
                                         ntp_fails < NTP_FAST_RETRIES ? NTP_FAST_MS : NTP_RETRY_MS);
-    }
-    if (cfg_new) {
-        cfg_new = false;
-        drives_down();
-        apply_cfg_block();
-        snprintf(wifi_status, sizeof wifi_status, "settings changed, not connected yet");
-        if (wifi_inited) cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);
     }
     if (test_req) {
         test_req = false;

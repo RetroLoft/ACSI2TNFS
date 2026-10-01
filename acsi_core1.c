@@ -532,30 +532,6 @@ static uint8_t send_reply(uint32_t len)
     return dma_out(reply, len) ? 0x00 : 0x02;
 }
 
-static uint32_t info_text(char *p, uint32_t max)
-{
-    uint32_t up = time_us_32() / 1000000u;
-    int n = snprintf(p, max,
-        "ACSI2TNFS firmware " FW_VERSION " (" __DATE__ " " __TIME__ ")\r\n"
-        "Board      : Raspberry Pi Pico" BOARD_NAME "\r\n"
-        "ACSI id    : %u%s\r\n"
-        "Disk       : %u sectors (%u KB) in Pico flash\r\n"
-        "Uptime     : %lu:%02lu:%02lu\r\n"
-        "Commands   : %lu\r\n"
-        "Sectors    : %lu read, %lu written\r\n"
-        "Errors     : %lu (ACK mismatches: %lu)\r\n",
-        g_cfg.acsi_id, pending_id >= 0 ? " (change pending, reset Atari)" : "",
-        DISK_SECTORS, DISK_SECTORS / 2,
-        (unsigned long)(up / 3600), (unsigned long)(up / 60 % 60), (unsigned long)(up % 60),
-        (unsigned long)g_stats.commands,
-        (unsigned long)g_stats.sectors_read, (unsigned long)g_stats.sectors_written,
-        (unsigned long)g_stats.errors, (unsigned long)g_stats.ack_mismatch);
-    if (n < 0) return 0;
-    if (BOARD_HAS_WIFI && (uint32_t)n < max)
-        n += (int)net_status_text(p + n, max - (uint32_t)n);
-    return (uint32_t)n < max ? (uint32_t)n : max - 1;
-}
-
 static uint8_t exec_cmd(const uint8_t *cdb, uint8_t cdb_len, uint32_t *bytes)
 {
     const bool ext = (cdb[0] & 0x1f) == 0x1f;
@@ -650,30 +626,6 @@ static uint8_t exec_cmd(const uint8_t *cdb, uint8_t cdb_len, uint32_t *bytes)
     case 0x11:  /* vendor: [0x11|id, 'A', 'T', sub, len/arg, 0] */
         if (ext || c[1] != 'A' || c[2] != 'T') break;
         switch (c[3]) {
-        case 0:     /* info text, NUL terminated (arg 0 = 1024 bytes) */
-            len = c[4] ? c[4] : 1024;
-            info_text((char *)reply, sizeof reply);
-            reply[sizeof reply - 1] = 0;
-            *bytes = len;
-            return send_reply(len);
-        case 1:     /* blink the led */
-            g_cfg.led_test = true;
-            return 0x00;
-        case 2:     /* set ACSI id (applied at next Atari reset) */
-            if (c[4] > 7) break;
-            pending_id = c[4];
-            return 0x00;
-        case 3:     /* network settings: 512 bytes "SSID\0PASS\0SERVER\0PATH\0",
-                       an empty field keeps the current value */
-            if (!BOARD_HAS_WIFI) break;
-            if (!dma_in(reply, 512)) return 0x02;
-            *bytes = 512;
-            net_settings_from_atari(reply);
-            return 0x00;
-        case 4:     /* (re)connect Wi-Fi and test the TNFS server */
-            if (!BOARD_HAS_WIFI) break;
-            net_request_test();
-            return 0x00;
         case 5:     /* configuration request, 512 bytes Atari -> Pico */
             if (!dma_in(reply, 512)) return 0x02;
             *bytes = 512;
@@ -683,11 +635,6 @@ static uint8_t exec_cmd(const uint8_t *cdb, uint8_t cdb_len, uint32_t *bytes)
             cfgrpc_response(reply);
             *bytes = 512;
             return send_reply(512);
-        case 7:     /* debug: 512 bytes from the Atari, printed on the USB console */
-            if (!dma_in(reply, 512)) return 0x02;
-            *bytes = 512;
-            cfgrpc_debug(reply);
-            return 0x00;
         case 8:     /* drive letters for the driver, 512 bytes: "ATL", count,
                        then per root sector partition entry the wanted letter
                        ('D'..'Z') or 0 = next free one (entry 0 = C: flash) */

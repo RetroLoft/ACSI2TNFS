@@ -353,7 +353,7 @@ int main(void)
     bool need_seed = !disk_seeded();
     if (need_seed) disk_seed_write_part(!disk_same_layout());
 
-    uint32_t last_hb = 0, led_until = 0;
+    uint32_t last_hb = 0;
     bool was_connected = false;
     for (;;) {
         acsi_event_t e;
@@ -387,9 +387,7 @@ int main(void)
         if (ch >= 0) console(ch);
 
         if (g_cfg.save_req) { g_cfg.save_req = false; cfg_save(); }
-        if (g_cfg.led_test) { g_cfg.led_test = false; led_until = now + 3000000; }
-        if ((int32_t)(led_until - now) > 0) gpio_put(PIN_LED_PICO, (now / 150000) & 1);
-        else if (!BOARD_HAS_WIFI && now - last_hb > 500000) {  /* W: led shared with core1 */
+        if (!BOARD_HAS_WIFI && now - last_hb > 500000) {  /* W: led shared with core1 */
             last_hb = now;
             gpio_put(PIN_LED_PICO, g_cfg.mode == MODE_TARGET ? 1 : !gpio_get(PIN_LED_PICO));
         }

@@ -33,7 +33,7 @@ file(STRINGS ${CMAKE_CURRENT_LIST_DIR}/version.txt ACSI2TNFS_VERSION LIMIT_COUNT
 string(STRIP "${ACSI2TNFS_VERSION}" ACSI2TNFS_VERSION)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_CURRENT_LIST_DIR}/version.txt)
 
-# Atari side: atari/mkdisk.py assembles boot code, driver and CONFIG.TOS
+# Atari side: atari/mkdisk.py assembles boot code and driver
 # (with the version from version.txt) and writes the built-in disk image
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 file(GLOB ATARI_SOURCES ${CMAKE_CURRENT_LIST_DIR}/atari/*.s ${CMAKE_CURRENT_LIST_DIR}/atari/*.inc

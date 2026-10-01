@@ -76,37 +76,6 @@ void cfgrpc_response(uint8_t *out512)
     memcpy(out512, resp, sizeof resp);
 }
 
-/* vendor sub 7: a crash dump (or any debug block) from the Atari */
-static uint8_t dbg[512];
-static volatile bool dbg_pending;
-
-void cfgrpc_debug(const uint8_t *blk512)
-{
-    memcpy(dbg, blk512, sizeof dbg);
-    __dmb();
-    dbg_pending = true;
-}
-
-static uint32_t be32(const uint8_t *p) { return ((uint32_t)p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]; }
-
-/* layout from CONFIG.TOS: [0] $380..$3FF (TOS crash save area), [128] tbase of
-   CONFIG.TOS itself (= where the crashed program was most likely loaded) */
-static void print_debug(void)
-{
-    const uint8_t *a = dbg;
-    printf("\n=== Atari crash dump (TOS $380 save area) ===\n");
-    printf("valid     : %08lx (12345678 = TOS saved a crash)\n", (unsigned long)be32(a));
-    for (int i = 0; i < 8; i++)
-        printf("D%d %08lx  A%d %08lx\n", i, (unsigned long)be32(a + 4 + i * 4),
-               i, (unsigned long)be32(a + 0x24 + i * 4));
-    printf("exception : %lu (bombs)\n", (unsigned long)be32(a + 0x44) >> 24);
-    printf("USP       : %08lx\n", (unsigned long)be32(a + 0x48));
-    printf("stack     :");
-    for (int i = 0; i < 16; i++) printf(" %02x%02x", a[0x4c + i * 2], a[0x4d + i * 2]);
-    printf("\ntbase now : %08lx\n", (unsigned long)be32(a + 128));
-    printf("=== end ===\n");
-}
-
 /* ---------------- encoding ---------------- */
 
 static uint32_t get32(const uint8_t *p) { return ((uint32_t)p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]; }
@@ -380,10 +349,6 @@ static void handle(void)
 
 void cfgrpc_poll(void)
 {
-    if (dbg_pending) {
-        dbg_pending = false;
-        print_debug();
-    }
     if (!req_pending) return;
     req_pending = false;
     __dmb();

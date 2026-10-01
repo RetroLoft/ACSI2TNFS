@@ -23,7 +23,10 @@ extern uint32_t la_buf[];
 extern volatile bool la_armed, la_done;
 #define LA_WORDS 8192
 
-acsi_cfg_t g_cfg = { .mode = MODE_SNIFF, .acsi_id = 0, .verbose = true };
+/* defaults for a new adapter (nothing in flash yet): hard disk on ACSI id 6.
+   Not 0: an internal Mega ST disk, a Megafile or an UltraSatan usually sits
+   there, and two devices on one id answer at the same time. */
+acsi_cfg_t g_cfg = { .mode = MODE_TARGET, .acsi_id = ACSI_DEFAULT_ID, .verbose = true };
 
 /* ---------------------------------------------------------------------------
    Settings in the last flash sector

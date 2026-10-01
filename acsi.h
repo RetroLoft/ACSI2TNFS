@@ -63,9 +63,14 @@
 /* Root sector: byte holding the ACSI id (patched by the firmware at runtime) */
 #define ROOT_ID_OFFSET      2
 
-#define FW_VERSION_STR      "0.4"
+/* FW_VERSION_STR comes from version.txt (set by CMakeLists.txt) */
+#ifndef FW_VERSION_STR
+#error "FW_VERSION_STR not set: build with CMake (version.txt)"
+#endif
 
 enum { MODE_SNIFF = 0, MODE_TARGET = 1 };
+
+#define ACSI_DEFAULT_ID     6           /* id of a new adapter, see acsi2tnfs.c */
 
 typedef struct {
     volatile uint8_t mode;       /* requested mode                        */
@@ -139,6 +144,9 @@ void net_request_test(void);                           /* core1: vendor sub 4  *
 uint32_t net_status_text(char *p, uint32_t max);       /* core1: info text     */
 uint32_t net_vdrives(void);                            /* TNFS partitions (fixed after start-up) */
 uint8_t net_vdrive_letter(uint32_t k);                 /* wanted letter of partition k, 0 = any */
+void net_clock(uint8_t *out);                          /* core1: vendor sub 9 (network time) */
+uint32_t net_clock_sync_state(void);                   /* 0 off, 1 synchronised, 2 not yet */
+void net_clock_keep(void);                             /* before a watchdog reboot */
 bool net_vread(uint32_t drive, uint32_t rel, uint32_t n, uint8_t *buf); /* core1: virtual part. */
 void vfat_bootsector(uint8_t *b);
 

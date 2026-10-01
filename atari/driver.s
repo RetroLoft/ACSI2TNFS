@@ -5,6 +5,7 @@
 ; letter from C: on, and hooks hdv_bpb / hdv_rw / hdv_mediach.
 
         include "layout.inc"
+        include "version.inc"           ; VERSION, from ../version.txt
 
 HDV_BPB     equ $472
 HDV_RW      equ $476
@@ -13,6 +14,7 @@ DRVBITS     equ $4c2
 BOOTDEV     equ $446
 RESVALID    equ $426
 RESVECTOR   equ $42a
+HZ_200      equ $4ba
 MAXPART     equ 4
 CHUNK       equ 64                      ; sectors per ACSI command
 
@@ -26,6 +28,7 @@ CHUNK       equ 64                      ; sectors per ACSI command
 id:         dc.w    0
 npart:      dc.w    0
 firstdrv:   dc.w    0
+skipclk:    dc.w    0                   ; no clock this boot (ESC / time-out)
 old_bpb:    dc.l    0
 old_rw:     dc.l    0
 old_mc:     dc.l    0
@@ -223,6 +226,205 @@ le16:   moveq   #0,d1
         move.b  (a0,d0.w),d1
         rts
 
+; ---------------------------------------------------------------------------
+; Network time: the adapter keeps the time (NTP) and hands it out with vendor
+; sub 9: "ATC", state (0 valid, 1 Wi-Fi, 2 none, 3 off, 4 time server), year.w,
+; month, day, hour, minute, second. While the adapter is still connecting we
+; wait up to 30 s with a countdown (Esc skips), in two steps: Wi-Fi (state 1)
+; and the time server (state 4); without time we say so and pause 1 s.
+; ---------------------------------------------------------------------------
+; d0.w = 1: wait while the adapter connects to Wi-Fi
+;        2: wait for the time server, then set the clock
+set_clock:
+        move.w  d0,a3                   ; phase
+        lea     skipclk(pc),a0
+        tst.w   (a0)
+        bne     .done                   ; ESC or time-out earlier: no clock
+        moveq   #0,d5                   ; step on screen: 0 none, 1 Wi-Fi, 4 time
+        moveq   #-1,d7                  ; seconds shown on this line
+.ask:   lea     cdb(pc),a0
+        move.w  id(pc),d1
+        lsl.b   #5,d1
+        ori.b   #$11,d1
+        move.b  d1,(a0)
+        move.b  #'A',1(a0)
+        move.b  #'T',2(a0)
+        move.b  #9,3(a0)
+        clr.b   4(a0)
+        clr.b   5(a0)
+        lea     bounce(pc),a1
+        clr.l   (a1)
+        moveq   #1,d0
+        moveq   #0,d1
+        bsr     acsi_cmd
+        lea     bounce(pc),a2
+        move.l  (a2),d0
+        clr.b   d0
+        cmp.l   #$41544300,d0           ; "ATC": older firmware says nothing
+        bne     .done
+        moveq   #0,d0
+        move.b  3(a2),d0
+        cmp.w   #3,d0
+        beq     .done                   ; switched off
+        cmp.w   #1,a3
+        bne     .ph2
+        cmp.w   #1,d0                   ; phase 1: only while connecting
+        beq     .wait
+        tst.w   d5
+        beq     .done
+        cmp.w   #2,d0
+        beq     .none                   ; Wi-Fi failed while we waited
+        lea     msg_okmark(pc),a0       ; Wi-Fi is up
+        bra     print
+.ph2:   tst.w   d0
+        beq     .set                    ; time valid
+        cmp.w   #2,d0
+        beq     .none                   ; no Wi-Fi / no time server
+.wait:  cmp.w   d5,d0                   ; a new step: own line, own 30 s
+        beq     .count
+        tst.w   d5
+        beq     .step
+        lea     msg_okmark(pc),a0       ; previous step done
+        bsr     print
+.step:  move.w  d0,d5
+        lea     msg_wifi(pc),a0
+        cmp.w   #1,d5
+        beq     .step2
+        lea     msg_time(pc),a0
+.step2: bsr     print
+        lea     msg_esc(pc),a0          ; hint two lines down, cursor back
+        bsr     print
+        moveq   #-1,d7
+        move.l  HZ_200.w,d6             ; start of this step
+.count: move.l  HZ_200.w,d0
+        sub.l   d6,d0
+        divu    #200,d0
+        moveq   #30,d1
+        sub.w   d0,d1                   ; seconds left
+        ble     .tmo
+        cmp.w   d7,d1
+        beq     .key
+        tst.w   d7
+        bmi     .num
+        lea     msg_bs(pc),a0           ; back over the two digits
+        bsr     print
+.num:   move.w  d1,d7
+        move.w  d1,d0
+        lea     msg_num(pc),a0
+        bsr     two
+        lea     msg_num(pc),a0
+        bsr     print
+.key:   move.w  #2,-(sp)
+        move.w  #1,-(sp)                ; Bconstat(CON)
+        trap    #13
+        addq.l  #4,sp
+        tst.w   d0
+        beq     .pause
+        move.w  #2,-(sp)
+        move.w  #2,-(sp)                ; Bconin(CON)
+        trap    #13
+        addq.l  #4,sp
+        cmp.b   #27,d0                  ; ESC: no clock this boot
+        bne     .pause
+        lea     skipclk(pc),a0
+        st      (a0)
+        lea     msg_cancel(pc),a0
+        bra     print
+.pause: moveq   #50,d0                  ; 0.25 s
+        bsr     delay
+        bra     .ask
+
+.tmo:   lea     skipclk(pc),a0          ; this step timed out: no clock
+        st      (a0)
+        lea     msg_komark(pc),a0
+        bra     .fail1
+.none:  lea     skipclk(pc),a0          ; the adapter gave up: say it once
+        st      (a0)
+        lea     msg_komark(pc),a0
+        tst.w   d5
+        bne     .fail1
+        lea     msg_notime(pc),a0       ; nothing on screen yet
+.fail1: bsr     print
+        move.l  #200,d0                 ; 1 s, so the message can be read
+        bra     delay
+
+.set:   tst.w   d5
+        beq     .set2
+        lea     msg_okmark(pc),a0       ; last step done
+        bsr     print
+.set2:  moveq   #0,d0                   ; GEMDOS date: (year-1980)<<9 | month<<5 | day
+        move.w  4(a2),d0
+        sub.w   #1980,d0
+        lsl.w   #4,d0
+        or.b    6(a2),d0
+        lsl.w   #5,d0
+        or.b    7(a2),d0
+        move.w  d0,d3
+        moveq   #0,d0                   ; time: hour<<11 | minute<<5 | second/2
+        move.b  8(a2),d0
+        lsl.w   #6,d0
+        or.b    9(a2),d0
+        lsl.w   #5,d0
+        moveq   #0,d1
+        move.b  10(a2),d1
+        lsr.w   #1,d1
+        or.w    d1,d0
+        move.w  d0,d4
+        move.w  d3,-(sp)
+        move.w  #$2b,-(sp)              ; Tsetdate
+        trap    #1
+        addq.l  #4,sp
+        move.w  d4,-(sp)
+        move.w  #$2d,-(sp)              ; Tsettime
+        trap    #1
+        addq.l  #4,sp
+        move.w  d4,-(sp)                ; Settime: keyboard / battery clock
+        move.w  d3,-(sp)
+        move.w  #22,-(sp)
+        trap    #14
+        addq.l  #6,sp
+        lea     bounce(pc),a2           ; the traps may change a0-a2
+        lea     msg_clk_d(pc),a0        ; "Clock set to DD-MM-YYYY HH:MM"
+        move.b  7(a2),d0
+        bsr     two
+        addq.l  #1,a0
+        move.b  6(a2),d0
+        bsr     two
+        addq.l  #1,a0
+        moveq   #0,d0
+        move.w  4(a2),d0
+        divu    #100,d0
+        move.l  d0,d1
+        bsr     two                     ; century
+        swap    d1
+        move.b  d1,d0
+        bsr     two
+        addq.l  #1,a0
+        move.b  8(a2),d0
+        bsr     two
+        addq.l  #1,a0
+        move.b  9(a2),d0
+        bsr     two
+        lea     msg_clock(pc),a0
+        bsr     print
+.done:  rts
+
+; d0.b (0..99) -> two digits at (a0)+
+two:    andi.l  #$ff,d0
+        divu    #10,d0
+        add.b   #'0',d0
+        move.b  d0,(a0)+
+        swap    d0
+        add.b   #'0',d0
+        move.b  d0,(a0)+
+        rts
+
+; wait d0.l ticks of 5 ms
+delay:  add.l   HZ_200.w,d0
+.w:     cmp.l   HZ_200.w,d0
+        bhi.s   .w
+        rts
+
 ; print a0 via BIOS Bconout: GEMDOS console calls are not usable during
 ; dmaboot (no process with standard handles yet)
 print:  movem.l d0-d2/a0-a3,-(sp)
@@ -376,6 +578,7 @@ init:   movem.l d0-d7/a0-a6,-(sp)
         lea     pdrv(pc),a1
         lea     msg_drv(pc),a3
         moveq   #0,d7
+        moveq   #0,d6                   ; a wanted letter was taken
 .let:   moveq   #0,d1
         move.b  4(a2,d7.w),d1           ; wanted letter or 0
         sub.b   #'A',d1
@@ -385,6 +588,7 @@ init:   movem.l d0-d7/a0-a6,-(sp)
         bge.s   .auto
         btst    d1,d0
         beq.s   .got
+        moveq   #1,d6
 .auto:  moveq   #2,d1
 .fr:    btst    d1,d0
         beq.s   .got
@@ -396,10 +600,13 @@ init:   movem.l d0-d7/a0-a6,-(sp)
         move.w  d7,d2
         add.w   d2,d2
         move.w  d1,(a1,d2.w)
-        add.b   #'A',d1
+        tst.w   d7
+        beq.s   .first
+        move.b  #',',(a3)+
+        move.b  #' ',(a3)+
+.first: add.b   #'A',d1
         move.b  d1,(a3)+
         move.b  #':',(a3)+
-        move.b  #' ',(a3)+
         addq.w  #1,d7
         cmp.w   npart(pc),d7
         blt.s   .let
@@ -441,20 +648,52 @@ init:   movem.l d0-d7/a0-a6,-(sp)
         move.l  a1,RESVECTOR.w
         move.l  #$31415926,RESVALID.w
 
+        move.w  d6,-(sp)                ; a wanted letter was taken
+        moveq   #1,d0                   ; Wi-Fi first (only shown when waiting)
+        bsr     set_clock
         lea     msg_ok(pc),a0
         bsr     print
+        tst.w   (sp)+
+        beq.s   .lfree
+        lea     msg_taken(pc),a0
+        bsr     print
+        move.l  #200,d0                 ; 1 s: noteworthy, let it be read
+        bsr     delay
+.lfree: moveq   #2,d0                   ; then the time server and the clock
+        bsr     set_clock
         movem.l (sp)+,d0-d7/a0-a6
         rts
 
 .fail:  lea     msg_fail(pc),a0
         bsr     print
+        move.l  #200,d0                 ; 1 s, so the message can be read
+        bsr     delay
         movem.l (sp)+,d0-d7/a0-a6
         rts
 
-msg_hello:  dc.b    13,10,27,"p ACSI2TNFS flash disk driver 0.2 ",27,"q",13,10,0
-msg_ok:     dc.b    " mounted as "
-msg_drv:    ds.b    16                  ; "C: D: E: ",13,10,0
-msg_fail:   dc.b    " disk not usable - driver not installed",13,10,0
+msg_hello:  dc.b    13,10,27,"pACSI2TNFS v"
+            VERSION
+            dc.b    27,"q",13,10
+            dc.b    "http://retroloft.net",13,10,13,10,0
+msg_ok:     dc.b    "[OK] Drives installed: "
+msg_drv:    ds.b    20                  ; "C:, D:, G:, N:",13,10,0
+msg_fail:   dc.b    "[KO] Disk not usable, driver not loaded",13,10,0
+msg_taken:  dc.b    "[--] Drive letter taken, used next free",13,10,0
+; status lines as in SideTNFS: "[..] step... NN", the mark is overwritten
+; with [OK] / [KO] / [--] when the step ends
+; save cursor, hint two lines down, back to the step line (VT52 ESC j/k)
+msg_esc:    dc.b    27,"j",13,10,13,10,"Press [ESC] to skip",27,"k",0
+msg_wifi:   dc.b    "[..] Wi-Fi... ",0
+msg_time:   dc.b    "[..] Time server... ",0
+msg_num:    dc.b    "30",0
+msg_bs:     dc.b    8,8,0
+; end of a step: mark, next line, clear the hint below (ESC J)
+msg_okmark: dc.b    13,"[OK]",13,10,27,"J",0
+msg_komark: dc.b    13,"[KO]",13,10,27,"J",0
+msg_cancel: dc.b    13,"[--]",13,10,27,"J",0
+msg_notime: dc.b    "[KO] No network time, clock not set",13,10,0
+msg_clock:  dc.b    "[OK] Date and time: "
+msg_clk_d:  dc.b    "DD-MM-YYYY HH:MM",13,10,0
             even
 
         if      *>DRVSECT*512

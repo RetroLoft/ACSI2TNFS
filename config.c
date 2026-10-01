@@ -346,7 +346,7 @@ static void handle(void)
         break;
 
     case CMD_GET_STATUS:
-        o = put32(o, g_set.rtc_enabled ? 2 : 0);        /* clock: disabled / not synced */
+        o = put32(o, net_clock_sync_state());           /* clock: off / synced / not yet */
         o = put32(o, net_link_up() ? 1 : 0);
         break;
 
@@ -379,6 +379,7 @@ void cfgrpc_poll(void)
         reboot_after_reply = false;
         printf("config: reboot requested by the Atari\n");
         sleep_ms(500);                                  /* let the Atari read the ACK */
+        net_clock_keep();                               /* time survives the reboot */
         watchdog_reboot(0, 0, 0);
     }
 }

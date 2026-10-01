@@ -44,23 +44,37 @@ cmake -G Ninja -B build
 ninja -C build
 ```
 
-Atari side (needs [vasm](http://sun.hasenbraten.de/vasm/), `vasmm68k_mot`):
+The version number lives in `version.txt` only. CMake passes it to the firmware,
+and `ninja` runs `atari/mkdisk.py` whenever `version.txt` or an Atari source changes.
+`mkdisk.py` writes `atari/version.inc`, assembles the boot code, driver and
+CONFIG.TOS with [vasm](http://sun.hasenbraten.de/vasm/) (`vasmm68k_mot`, or set
+`VASM`) and writes the disk image and `disk_seed.h`. It can also be run on its own:
 
 ```
 cd atari
-vasmm68k_mot -m68000 -Fbin -nosym -o out/BOOT.BIN boot.s
-vasmm68k_mot -m68000 -Fbin -nosym -o out/DRV.BIN driver.s
-vasmm68k_mot -m68000 -Ftos -nosym -o out/CONFIG.TOS config.s
-python mkdisk.py          # writes out/disk.img and ../disk_seed.h
+python mkdisk.py          # out/BOOT.BIN, DRV.BIN, CONFIG.TOS, disk.img, ../disk_seed.h
 ```
 
 Flash `build/acsi2tnfs.uf2` in BOOTSEL mode. The firmware writes the built-in disk
 image to flash when the boot/driver area differs.
 
+## ACSI id
+
+A new adapter answers on ACSI id 6 (`ACSI_DEFAULT_ID`), not 0: an internal Mega ST
+disk, a Megafile or an UltraSatan usually sits on 0, and two devices on one id answer
+at the same time. Then the Atari cannot reach the adapter either, so the id can be
+changed in ways that do not need the ACSI bus:
+
+- USB console: keys `0`-`7` (always works, also during a conflict)
+- CONFIG.TOS: option 2 (applied at the next Atari reset)
+- planned: the configuration program ACSITNFS.PRG and the BOOT button of the
+  Pimoroni Pico Plus 2 W
+
 ## USB console
 
-`s` sniffer · `t` target · `0`-`7` ACSI id · `v` verbose · `i` info · `d`/`x` sector dumps ·
-`F` rewrite built-in disk · `L`/`l` arm/dump logic analyser · `B` reboot to BOOTSEL
+`s` sniffer · `t` target · `0`-`7` ACSI id · `H` hide/show · `v` verbose · `i` info ·
+`d`/`x` sector dumps · `F` rewrite built-in disk · `L`/`l` arm/dump logic analyser ·
+`B` reboot to BOOTSEL
 
 ## Hardware notes
 

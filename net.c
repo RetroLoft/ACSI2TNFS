@@ -13,6 +13,7 @@
 #include <string.h>
 #include "pico/stdlib.h"
 #include "hardware/sync.h"
+#include "hardware/structs/watchdog.h"
 #include "acsi.h"
 #include "settings.h"
 
@@ -132,6 +133,108 @@ void net_console_status(void)
     printf("\n");
 }
 
+/* ---------------- clock (set by NTP on core0, read by the driver via core1) ---------------- */
+
+/* CLK_WAIT: waiting for Wi-Fi, CLK_NTP: Wi-Fi up, waiting for the time server */
+enum { CLK_VALID = 0, CLK_WAIT = 1, CLK_NONE = 2, CLK_OFF = 3, CLK_NTP = 4 };
+static volatile uint8_t  clk_state = CLK_OFF;
+static volatile uint32_t clk_seq, clk_unix;    /* UTC seconds at clk_us */
+static volatile uint64_t clk_us;
+
+static void clock_set(uint32_t unix)
+{
+    clk_seq++;                                  /* odd: being written */
+    __dmb();
+    clk_unix = unix;
+    clk_us = time_us_64();
+    __dmb();
+    clk_seq++;
+    clk_state = CLK_VALID;
+}
+
+/* fixed UTC offset from the settings: "+1", "-5", "+5.5", "+5:30" */
+static int32_t utc_offset_sec(void)
+{
+    const char *s = g_set.utc_offset;
+    int sign = 1, h = 0, m = 0;
+    if (*s == '+' || *s == '-') sign = *s++ == '-' ? -1 : 1;
+    while (*s >= '0' && *s <= '9') h = h * 10 + (*s++ - '0');
+    if (*s == '.' && s[1] >= '0' && s[1] <= '9') m = (s[1] - '0') * 6;
+    else if (*s == ':') m = (s[1] - '0') * 10 + (s[2] >= '0' && s[2] <= '9' ? s[2] - '0' : 0);
+    return sign * (h * 3600 + m * 60);
+}
+
+/* UTC seconds now (any core; only meaningful in state CLK_VALID) */
+static uint32_t clock_now(void)
+{
+    uint32_t seq, unix;
+    uint64_t us;
+    do {
+        seq = clk_seq;
+        __dmb();
+        unix = clk_unix;
+        us = clk_us;
+        __dmb();
+    } while ((seq & 1) || seq != clk_seq);
+    return unix + (uint32_t)((time_us_64() - us) / 1000000u);
+}
+
+/* The configuration program restarts the Pico and the Atari together; Wi-Fi
+   and NTP then take longer than the driver waits. Keep the time across that
+   watchdog reboot in the watchdog scratch registers, which survive it. */
+#define CLK_KEEP_MAGIC  0x434c4b31u                     /* "CLK1" */
+
+void net_clock_keep(void)
+{
+    if (clk_state != CLK_VALID) return;
+    watchdog_hw->scratch[5] = clock_now();
+    watchdog_hw->scratch[4] = CLK_KEEP_MAGIC;
+}
+
+static void clock_restore(void)
+{
+    if (watchdog_hw->scratch[4] != CLK_KEEP_MAGIC) return;
+    watchdog_hw->scratch[4] = 0;
+    if (g_set.rtc_enabled)      /* + time since this boot; the reboot itself is quick */
+        clock_set(watchdog_hw->scratch[5] + (uint32_t)(time_us_64() / 1000000u));
+}
+
+/* core1, vendor sub 9: "ATC", state, then the local time as year (hi, lo),
+   month, day, hour, minute, second (only valid in state CLK_VALID) */
+void net_clock(uint8_t *out)
+{
+    memcpy(out, "ATC", 3);
+    out[3] = clk_state;
+    if (clk_state != CLK_VALID) return;
+    int64_t t = (int64_t)clock_now() + utc_offset_sec();
+    uint32_t days = (uint32_t)(t / 86400), sec = (uint32_t)(t % 86400);
+    /* civil from days (Howard Hinnant) */
+    int32_t z = (int32_t)days + 719468;
+    int32_t era = z / 146097;
+    uint32_t doe = (uint32_t)(z - era * 146097);
+    uint32_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    int32_t y = (int32_t)yoe + era * 400;
+    uint32_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    uint32_t mp = (5 * doy + 2) / 153;
+    uint32_t d = doy - (153 * mp + 2) / 5 + 1;
+    uint32_t m = mp < 10 ? mp + 3 : mp - 9;
+    if (m <= 2) y++;
+    out[4] = (uint8_t)(y >> 8);
+    out[5] = (uint8_t)y;
+    out[6] = (uint8_t)m;
+    out[7] = (uint8_t)d;
+    out[8] = (uint8_t)(sec / 3600);
+    out[9] = (uint8_t)(sec / 60 % 60);
+    out[10] = (uint8_t)(sec % 60);
+}
+
+/* configuration program status: 0 disabled, 1 synchronised, 2 not synchronised */
+uint32_t net_clock_sync_state(void)
+{
+    if (!g_set.rtc_enabled) return 0;
+    return clk_state == CLK_VALID ? 1 : 2;
+}
+
 /* ---------------- virtual partition: core1 <-> core0 hand-over ---------------- */
 
 /* core1 posts a sector request, core0 (network) fills the buffer */
@@ -187,7 +290,7 @@ bool net_vread(uint32_t drive, uint32_t rel, uint32_t n, uint8_t *buf)
 #if !BOARD_HAS_WIFI
 
 bool net_link_up(void) { return false; }
-void net_init(void) { }
+void net_init(void) { clk_state = g_set.rtc_enabled ? CLK_NONE : CLK_OFF; clock_restore(); }
 void net_poll(void) { cfg_new = false; test_req = false; }
 static void drives_from_settings(void) { }
 uint32_t net_vdrives(void) { return 0; }
@@ -316,18 +419,18 @@ static bool wifi_connect(void)
             sleep_ms(50);
         }
         if (!err) break;
-        printf("net: Wi-Fi try %d: %s\n", attempt, err);
+        printf("net: [%lu ms] Wi-Fi try %d: %s\n", (unsigned long)(time_us_64() / 1000), attempt, err);
         /* a wrong password will not get better by retrying */
         if (attempt >= 3 || !strcmp(err, "wrong password")) {
             snprintf(wifi_status, sizeof wifi_status, "'%s': %s", g_net.ssid, err);
             return false;
         }
         cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);
-        sleep_ms(1000);
+        sleep_ms(250);                  /* the first join after power-up often fails */
     }
     const ip4_addr_t *ip = netif_ip4_addr(netif_default);
     snprintf(wifi_status, sizeof wifi_status, "connected, IP %s", ip4addr_ntoa(ip));
-    printf("net: Wi-Fi %s\n", wifi_status);
+    printf("net: [%lu ms] Wi-Fi %s\n", (unsigned long)(time_us_64() / 1000), wifi_status);
     return true;
 }
 
@@ -569,21 +672,89 @@ static void dns_found_cb(const char *name, const ip_addr_t *ip, void *arg)
     else dns_state = -1;
 }
 
-static bool resolve_server(vdrive_t *d)
+/* IP address or host name -> *ip */
+static bool resolve_host(const char *host, ip_addr_t *ip)
 {
-    if (ipaddr_aton(d->server, &d->ip)) return true;
-    snprintf(d->status, sizeof d->status, "looking up '%s'...", d->server);
+    if (ipaddr_aton(host, ip)) return true;
     dns_state = 0;
     cyw43_arch_lwip_begin();
-    err_t e = dns_gethostbyname(d->server, &dns_ip, dns_found_cb, NULL);
+    err_t e = dns_gethostbyname(host, &dns_ip, dns_found_cb, NULL);
     cyw43_arch_lwip_end();
-    if (e == ERR_OK) { d->ip = dns_ip; return true; }   /* cached */
+    if (e == ERR_OK) { *ip = dns_ip; return true; }     /* cached */
     if (e == ERR_INPROGRESS) {
         absolute_time_t until = make_timeout_time_ms(5000);
         while (!dns_state && !time_reached(until)) sleep_ms(10);
-        if (dns_state == 1) { d->ip = dns_ip; return true; }
+        if (dns_state == 1) { *ip = dns_ip; return true; }
     }
+    return false;
+}
+
+static bool resolve_server(vdrive_t *d)
+{
+    snprintf(d->status, sizeof d->status, "looking up '%s'...", d->server);
+    if (resolve_host(d->server, &d->ip)) return true;
     snprintf(d->status, sizeof d->status, "host name '%s' not found (DNS)", d->server);
+    return false;
+}
+
+/* ---------------- network time (NTP) ----------------
+ * The Pico keeps the time (it has its own power supply, so it stays in sync
+ * while the Atari is switched off); the driver asks for it at boot. */
+
+#define NTP_RESYNC_MS   (6u * 3600u * 1000u)     /* keep the Pico clock in step */
+#define NTP_RETRY_MS    (30u * 1000u)
+
+static struct udp_pcb *ntp_pcb;
+static volatile uint32_t ntp_rx_unix;
+static absolute_time_t ntp_next;
+static int ntp_fails;           /* failed rounds since Wi-Fi came up */
+#define NTP_FAST_RETRIES 4      /* the first answer after joining is sometimes lost */
+#define NTP_FAST_MS      2000u
+
+static void ntp_rx(void *arg, struct udp_pcb *upcb, struct pbuf *p,
+                   const ip_addr_t *addr, u16_t port)
+{
+    (void)arg; (void)upcb; (void)addr; (void)port;
+    uint8_t b[48];
+    if (p->tot_len >= 48 && pbuf_copy_partial(p, b, 48, 0) == 48 && (b[0] & 7) == 4) {
+        uint32_t ntp = ((uint32_t)b[40] << 24) | (b[41] << 16) | (b[42] << 8) | b[43];
+        ntp_rx_unix = ntp - 2208988800u;                /* 1900 -> 1970 */
+    }
+    pbuf_free(p);
+}
+
+static bool ntp_sync(void)
+{
+    ip_addr_t ip;
+    if (!resolve_host(g_set.ntp_server, &ip)) {
+        printf("net: NTP server '%s' not found\n", g_set.ntp_server);
+        return false;
+    }
+    cyw43_arch_lwip_begin();
+    if (!ntp_pcb && (ntp_pcb = udp_new_ip_type(IPADDR_TYPE_V4)) != NULL)
+        udp_recv(ntp_pcb, ntp_rx, NULL);
+    cyw43_arch_lwip_end();
+    if (!ntp_pcb) return false;
+    for (int attempt = 0; attempt < 3; attempt++) {
+        ntp_rx_unix = 0;
+        cyw43_arch_lwip_begin();
+        struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, 48, PBUF_RAM);
+        if (p) {
+            memset(p->payload, 0, 48);
+            ((uint8_t *)p->payload)[0] = 0x23;          /* version 4, client */
+            udp_sendto(ntp_pcb, p, &ip, 123);
+            pbuf_free(p);
+        }
+        cyw43_arch_lwip_end();
+        absolute_time_t until = make_timeout_time_ms(2000);
+        while (!ntp_rx_unix && !time_reached(until)) sleep_ms(5);
+        if (ntp_rx_unix) {
+            clock_set(ntp_rx_unix);
+            printf("net: [%lu ms] NTP time from %s\n", (unsigned long)(time_us_64() / 1000), g_set.ntp_server);
+            return true;
+        }
+    }
+    printf("net: no answer from NTP server %s\n", g_set.ntp_server);
     return false;
 }
 
@@ -1035,8 +1206,19 @@ static void tnfs_connect_and_scan(void)
     valloc_n = 0;
     vpool[0] = 0;
     vpool_len = 1;
+    if (!wifi_connect()) {
+        if (g_set.rtc_enabled && clk_state != CLK_VALID) clk_state = CLK_NONE;
+        return;
+    }
+    /* the time first: the driver may be waiting for it at boot */
+    if (g_set.rtc_enabled) {
+        if (clk_state != CLK_VALID) clk_state = CLK_NTP;
+        ntp_fails = 0;
+        bool ok = ntp_sync();
+        if (!ok) ntp_fails = 1;     /* CLK_NTP stays: quick retries from net_poll */
+        ntp_next = make_timeout_time_ms(ok ? NTP_RESYNC_MS : NTP_FAST_MS);
+    }
     if (!nvd) { printf("net: no TNFS drive configured\n"); return; }
-    if (!wifi_connect()) return;
     for (int i = 0; i < nvd; i++) {
         vdrive_t *d = cur = &vd[i];
         d->dir[0] = 0;
@@ -1068,6 +1250,8 @@ static void tnfs_connect_and_scan(void)
 
 void net_init(void)
 {
+    clk_state = !g_set.rtc_enabled ? CLK_OFF : g_net.ssid[0] ? CLK_WAIT : CLK_NONE;
+    clock_restore();
     if (g_net.ssid[0]) {
         snprintf(wifi_status, sizeof wifi_status, "idle (not connected yet)");
         test_req = true;                            /* auto-connect at start-up */
@@ -1076,6 +1260,15 @@ void net_init(void)
 
 void net_poll(void)
 {
+    if (g_set.rtc_enabled && !test_req && net_link_up() && time_reached(ntp_next)) {
+        bool ok = ntp_sync();
+        if (ok) ntp_fails = 0;
+        else if (ntp_fails < NTP_FAST_RETRIES && ++ntp_fails >= NTP_FAST_RETRIES &&
+                 clk_state != CLK_VALID)
+            clk_state = CLK_NONE;   /* the driver stops waiting */
+        ntp_next = make_timeout_time_ms(ok ? NTP_RESYNC_MS :
+                                        ntp_fails < NTP_FAST_RETRIES ? NTP_FAST_MS : NTP_RETRY_MS);
+    }
     if (cfg_new) {
         cfg_new = false;
         drives_down();

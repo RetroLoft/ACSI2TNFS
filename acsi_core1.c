@@ -622,7 +622,8 @@ static uint8_t exec_cmd(const uint8_t *cdb, uint8_t cdb_len, uint32_t *bytes)
         reply[4] = 31;
         memcpy(reply + 8,  "PICO    ", 8);
         memcpy(reply + 16, "ACSI2TNFS FLASH ", 16);
-        memcpy(reply + 32, FW_VERSION "  ", 4);
+        memcpy(reply + 32, FW_VERSION "    ", 4);      /* revision: 4 chars */
+        if (reply[35] == '.') reply[35] = ' ';          /* "1.2.3" -> "1.2 " */
         *bytes = len;
         return len ? send_reply(len) : 0x00;
 
@@ -690,6 +691,13 @@ static uint8_t exec_cmd(const uint8_t *cdb, uint8_t cdb_len, uint32_t *bytes)
             reply[3] = 4;
             for (uint32_t k = 0; k < net_vdrives() && k < 3; k++)
                 reply[5 + k] = net_vdrive_letter(k);
+            *bytes = 512;
+            return send_reply(512);
+        case 9:     /* network time for the driver, 512 bytes: "ATC", state
+                       (0 valid, 1 waiting for Wi-Fi/NTP, 2 none, 3 off),
+                       year hi/lo, month, day, hour, minute, second (local) */
+            memset(reply, 0, 512);
+            net_clock(reply);
             *bytes = 512;
             return send_reply(512);
         }

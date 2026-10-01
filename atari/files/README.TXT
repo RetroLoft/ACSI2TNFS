@@ -1,46 +1,47 @@
-ACSI2TNFS - FLASH HARDDISK
-==========================
+ACSI2TNFS - FLASH HARD DISK
+===========================
 
-Gefeliciteerd: je leest dit bestand vanaf een Raspberry Pi Pico
-die zich via de ACSI-poort gedraagt als harddisk.
+You are reading this file from a Raspberry Pi Pico that acts as
+a hard disk on the ACSI port of your Atari.
 
-Wat staat er op deze schijf?
-  README.TXT   dit bestand
-  ACSITNFS.PRG configuratieprogramma (GEM): Wi-Fi, TNFS-drives, klok
+What is on this disk?
+  README.TXT   this file
+  ACSITNFS.PRG configuration program (GEM): Wi-Fi, TNFS drives,
+               clock and ACSI device ID
 
-Hoe werkt het?
-  - De Pico beantwoordt ACSI-commando's op zijn eigen device id
-    (een nieuwe adapter: id 6, zie "ACSI id wijzigen").
-  - De schijf (ca. 1 MB) staat in het flashgeheugen van de Pico.
-  - Sector 0 bevat een bootloader. TOS voert die uit tijdens het
-    opstarten; die laadt een kleine driver die de GEM-partitie
-    als station C: aanmeldt.
-  - Schrijven kan ook: de Pico wist en programmeert telkens een
-    blok van 4 KB flash.
+How does it work?
+  - The Pico answers ACSI commands on its own device ID
+    (a new adapter: ID 6, see "Changing the ACSI ID").
+  - The disk (about 1 MB) lives in the flash memory of the Pico.
+  - Sector 0 holds a boot loader. TOS runs it at start-up; it
+    loads a small driver that installs the GEM partition as
+    drive C: and the TNFS drives after it.
+  - Writing works too: the Pico erases and programs flash in
+    blocks of 4 KB.
 
-Station C: zichtbaar maken op de desktop
-  Selecteer het icoon van floppy A:, kies Options / Install Disk
-  Drive, verander de letter in C en klik op Install.
-  Daarna eventueel Options / Save Desktop.
+Showing drive C: on the desktop
+  Select the icon of floppy A:, choose Options / Install Disk
+  Drive, change the letter to C and click Install.
+  Then use Options / Save Desktop if you like.
 
-ACSI id wijzigen
-  Geef elk apparaat op de ACSI-bus een eigen id. Hangen twee
-  apparaten op hetzelfde id, dan antwoorden ze tegelijk en werkt
-  geen van beide; ook ACSITNFS.PRG bereikt de adapter dan niet.
-  - ACSITNFS.PRG: Config > More > ACSI device ID (na Save en
-    een herstart).
-  - USB-console van de Pico: toets 0 t/m 7. Werkt altijd, ook
-    bij een conflict: sluit de Pico met USB aan op een pc en
-    open de seriele poort met een terminalprogramma.
+Changing the ACSI ID
+  Give every device on the ACSI bus its own ID. If two devices
+  share an ID they answer at the same time and neither works;
+  ACSITNFS.PRG cannot reach the adapter then either.
+  - ACSITNFS.PRG: Config > More > ACSI device ID (after Save
+    and a restart).
+  - USB console of the Pico: keys 0 to 7. Always works, also
+    during a conflict: connect the Pico to a PC over USB and
+    open its serial port in a terminal program.
 
-README.TXT en ACSITNFS.PRG zijn alleen-lezen. Per ongeluk weg?
-  Toets R in de USB-console zet ze terug; je eigen bestanden op C:
-  blijven staan. Reset daarna de Atari.
+README.TXT and ACSITNFS.PRG are read-only. Deleted one anyway?
+  Key R on the USB console puts them back; your own files on C:
+  stay. Reset the Atari afterwards.
 
-USB-console van de Pico (115200, maakt niet uit bij USB):
-  0-7 = ACSI id           H = verbergen/tonen     K = klok aan/uit
-  R = systeembestanden op C: herstellen           F = C: helemaal opnieuw
-  i = info                n = netwerkstatus       B = BOOTSEL
+USB console of the Pico (any baud rate, it is USB):
+  0-7 = ACSI ID           H = hide/show           K = clock on/off
+  R = restore system files on C:                  F = rewrite C:
+  i = info                n = network status      B = BOOTSEL
 
-Met een Pico W / Pico 2 W: Wi-Fi, TNFS-drives en de klok stel je
-in met ACSITNFS.PRG.
+With a Pico W / Pico 2 W: set up Wi-Fi, the TNFS drives and the
+clock with ACSITNFS.PRG.

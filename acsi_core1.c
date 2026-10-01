@@ -826,6 +826,7 @@ static void __not_in_flash_func(target_loop)(void)
         if (reset_active()) {
             if (!in_reset) {
                 in_reset = true;
+                g_cfg.mute_until_reset = false;     /* fresh GEMDOS: safe again */
                 bus_idle();
                 g_stats.resets++;
                 ev_push(EV_RESET, 0, 0);
@@ -856,6 +857,7 @@ static void __not_in_flash_func(target_loop)(void)
         if ((S_DATA(s) >> 5) != g_cfg.acsi_id) continue;
         /* hidden: no /IRQ, so TOS and hard disk drivers see an empty id */
         if (g_cfg.hidden && (S_DATA(s) & 0x1f) != 0x11) continue;
+        if (g_cfg.mute_until_reset) continue;
         handle_command(s);
     }
 }

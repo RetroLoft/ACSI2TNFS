@@ -269,7 +269,13 @@ static void console(int ch)
     case 'i': info(); break;
     case 'n': net_console_status(); break;
     case 'N': printf("network test requested\n"); net_request_test(); break;
-    case 'F': disk_seed_write(); break;
+    case 'F':
+        disk_seed_write();
+        /* the Atari still has the old FAT and directories cached: keep it
+           off the bus until it resets, or its next write corrupts C: */
+        g_cfg.mute_until_reset = true;
+        printf("** RESET THE ATARI NOW: the adapter answers nothing until then **\n");
+        break;
     case 'L': la_done = false; la_armed = true; printf("logic analyser armed (next WRITE)\n"); break;
     case 'l': {
         if (!la_done) { printf("no capture\n"); break; }

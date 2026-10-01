@@ -80,6 +80,9 @@ typedef struct {
     volatile bool    save_req;   /* core1 asks core0 to store settings    */
     volatile bool    hidden;     /* act as if unplugged: answer only our own
                                     vendor command ($11 'AT'), nothing else */
+    volatile bool    mute_until_reset; /* C: was rewritten under a running Atari:
+                                    answer nothing until its next reset, so
+                                    GEMDOS cannot write with its stale FAT */
 } acsi_cfg_t;
 
 extern acsi_cfg_t g_cfg;

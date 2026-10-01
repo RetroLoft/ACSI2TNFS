@@ -13,6 +13,7 @@
 #include "pico/multicore.h"
 #include "pico/flash.h"
 #include "pico/bootrom.h"
+#include "pico/rand.h"
 #include "hardware/flash.h"
 #include "hardware/watchdog.h"
 #include "hardware/clocks.h"
@@ -27,6 +28,18 @@ extern volatile bool la_armed, la_done;
    Not 0: an internal Mega ST disk, a Megafile or an UltraSatan usually sits
    there, and two devices on one id answer at the same time. */
 acsi_cfg_t g_cfg = { .mode = MODE_TARGET, .acsi_id = ACSI_DEFAULT_ID, .verbose = true };
+
+/* media change counters (see acsi.h); random at start-up, so after a Pico
+   restart the driver always sees a change and GEMDOS re-reads everything */
+volatile uint8_t g_part_gen[4];
+
+void disk_changed(int part)
+{
+    g_part_gen[part]++;
+    /* C: is writable: keep GEMDOS off it until the driver has seen the
+       change. The TNFS drives are read-only: a stale cache cannot hurt them */
+    if (part == 0) g_cfg.mute_until_reset = true;
+}
 
 /* ---------------------------------------------------------------------------
    Settings in the last flash sector
@@ -280,7 +293,8 @@ static void console(int ch)
             if (n < 0) printf("!! restoring the system files failed\n");
             else printf("%d system file(s) restored or updated\n", n);
         }
-        printf("** RESET THE ATARI NOW: the adapter answers nothing until then **\n");
+        disk_changed(0);
+        printf("C: changed: the driver reports a media change to GEMDOS\n");
         break;
     case 'F':
         /* the Atari still has the old FAT and directories cached: keep it
@@ -289,7 +303,8 @@ static void console(int ch)
         sleep_ms(100);                      /* a running command finishes */
         acsi_stage_invalidate();
         disk_seed_write();
-        printf("** RESET THE ATARI NOW: the adapter answers nothing until then **\n");
+        disk_changed(0);
+        printf("C: changed: the driver reports a media change to GEMDOS\n");
         break;
     case 'L': la_done = false; la_armed = true; printf("logic analyser armed (next WRITE)\n"); break;
     case 'l': {
@@ -365,13 +380,15 @@ int main(void)
     multicore_launch_core1(core1_main);
     t_origin = time_us_32();
     sleep_ms(50);                       /* core1 registers as flash lockout victim */
+    uint32_t r = get_rand_32();
+    for (int k = 0; k < 4; k++) g_part_gen[k] = (uint8_t)(r >> (8 * k));
     bool need_seed = !disk_seeded();
     bool full_seed = need_seed && !disk_same_layout();
     if (need_seed) disk_seed_write_part(full_seed);
     /* new firmware: bring README.TXT / ACSITNFS.PRG on C: up to date, keep
        the user's own files (a deleted system file is only restored with R) */
     if (!full_seed && sysfiles_sync(disk_seed, false) > 0)
-        g_cfg.mute_until_reset = true;      /* a running Atari has the old FAT cached */
+        disk_changed(0);                    /* a running Atari has the old FAT cached */
 
     uint32_t last_hb = 0;
     bool was_connected = false;

@@ -80,8 +80,10 @@ typedef struct {
     volatile bool    hidden;     /* act as if unplugged: answer only our own
                                     vendor command ($11 'AT'), nothing else */
     volatile bool    mute_until_reset; /* C: was rewritten under a running Atari:
-                                    answer nothing until its next reset, so
-                                    GEMDOS cannot write with its stale FAT */
+                                    answer only our vendor command until the
+                                    driver has seen the media change (sub 10)
+                                    or the Atari resets, so GEMDOS cannot
+                                    write with its stale FAT */
 } acsi_cfg_t;
 
 extern acsi_cfg_t g_cfg;
@@ -149,6 +151,12 @@ void net_clock(uint8_t *out);                          /* core1: vendor sub 9 (n
 uint32_t net_clock_sync_state(void);                   /* 0 off, 1 synchronised, 2 not yet */
 void net_clock_keep(void);                             /* before a watchdog reboot */
 void net_clock_toggle(void);                           /* console K */
+
+/* media change: one counter per root sector partition (0 = C:, 1-3 = the
+   TNFS drives), bumped when the Pico changed that partition under the Atari;
+   the driver reads them with vendor sub 10 from hdv_mediach */
+extern volatile uint8_t g_part_gen[4];
+void disk_changed(int part);                /* bump + keep GEMDOS off until seen */
 
 /* system files on C: (sysfiles.c): number written, -1 on error */
 int sysfiles_sync(const uint8_t *image, bool restore_missing);

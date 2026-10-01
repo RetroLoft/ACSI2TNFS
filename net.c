@@ -1211,6 +1211,7 @@ static void tnfs_connect_and_scan(void)
                  d->use_tcp ? "TCP" : "UDP", d->vmaj, d->vmin,
                  (unsigned long)d->files, (unsigned long)d->dirs, d->skipped ? " (some skipped)" : "");
         printf("net: TNFS %d %s\n", i + 1, d->status);
+        disk_changed(1 + i);                /* new tree: GEMDOS must re-read */
     }
     cur = NULL;
 }

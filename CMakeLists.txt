@@ -74,6 +74,7 @@ pico_enable_stdio_usb(acsi2tnfs 1)
 
 target_link_libraries(acsi2tnfs
     pico_stdlib
+    pico_rand
     pico_multicore
     pico_flash
     hardware_pio

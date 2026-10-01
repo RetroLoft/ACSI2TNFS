@@ -29,6 +29,8 @@ id:         dc.w    0
 npart:      dc.w    0
 firstdrv:   dc.w    0
 skipclk:    dc.w    0                   ; no clock this boot (ESC / time-out)
+gens:       ds.b    MAXPART             ; media change counters last seen
+pchg:       ds.b    MAXPART             ; a change not yet reported to GEMDOS
 old_bpb:    dc.l    0
 old_rw:     dc.l    0
 old_mc:     dc.l    0
@@ -64,6 +66,8 @@ find:   moveq   #0,d1
 my_bpb: move.w  4(sp),d0
         bsr   find
         bmi.s   .old
+        lea     pchg(pc),a0             ; GEMDOS logs the drive in again:
+        clr.b   (a0,d1.w)               ; a media change has been taken in
         mulu    #18,d1
         lea     bpbs(pc),a0
         add.l   d1,a0
@@ -73,13 +77,65 @@ my_bpb: move.w  4(sp),d0
         jmp     (a0)
 
 ; LONG hdv_mediach(WORD dev)
+; The adapter counts changes it made to a partition under the Atari (C:
+; rewritten or its system files restored, a TNFS drive rescanned). Asked on
+; every call (about 0.5 ms). A new count is reported as "changed" until
+; GEMDOS fetches the BPB again: on "changed" it drops the drive's buffers
+; (also dirty ones, so a stale FAT is never written), logs the drive in
+; again and restarts the call. It only acts on it at a buffer access, so
+; the flag must not be cleared on the first call.
 my_mc:  move.w  4(sp),d0
         bsr   find
         bmi.s   .old
-        moveq   #0,d0                   ; never changed
+        move.w  d1,-(sp)                ; partition index
+        bsr     query_gen
+        move.w  (sp)+,d1
+        lea     pchg(pc),a0
+        tst.b   (a0,d1.w)
+        beq.s   .same
+        moveq   #2,d0                   ; media changed, until GEMDOS asks
+        rts                             ; for the BPB again (my_bpb)
+.same:  moveq   #0,d0                   ; not changed
         rts
 .old:   move.l  old_mc(pc),a0
         jmp     (a0)
+
+; vendor sub 10: "ATG", count, one counter per partition entry -> pchg
+query_gen:
+        movem.l d2-d4/a2,-(sp)
+        lea     cdb(pc),a0
+        move.w  id(pc),d1
+        lsl.b   #5,d1
+        ori.b   #$11,d1
+        move.b  d1,(a0)
+        move.b  #'A',1(a0)
+        move.b  #'T',2(a0)
+        move.b  #10,3(a0)
+        clr.b   4(a0)
+        clr.b   5(a0)
+        lea     bounce(pc),a1
+        clr.l   (a1)
+        moveq   #1,d0
+        moveq   #0,d1
+        bsr     acsi_cmd
+        lea     bounce(pc),a2
+        move.l  (a2),d0
+        clr.b   d0
+        cmp.l   #$41544700,d0           ; "ATG": older firmware never changes
+        bne.s   .q
+        lea     gens(pc),a0
+        lea     pchg(pc),a1
+        moveq   #0,d2
+.g:     move.b  4(a2,d2.w),d0
+        cmp.b   (a0,d2.w),d0
+        beq.s   .gs
+        move.b  d0,(a0,d2.w)
+        st      (a1,d2.w)
+.gs:    addq.w  #1,d2
+        cmp.w   #MAXPART,d2
+        blt.s   .g
+.q:     movem.l (sp)+,d2-d4/a2
+        rts
 
 ; resvector: TOS calls this early in every warm reset, before GEMDOS starts.
 ; _bootdev still says C: from this session and GEMDOS would take it as its
@@ -661,6 +717,9 @@ init:   movem.l d0-d7/a0-a6,-(sp)
         bsr     delay
 .lfree: moveq   #2,d0                   ; then the time server and the clock
         bsr     set_clock
+        bsr     query_gen               ; media change counters: start values
+        lea     pchg(pc),a0
+        clr.l   (a0)                    ; nothing to report yet (MAXPART = 4)
         movem.l (sp)+,d0-d7/a0-a6
         rts
 

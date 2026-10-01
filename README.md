@@ -78,8 +78,10 @@ changed in ways that do not need the ACSI bus:
 status/reconnect · `v` verbose · `i` info · `d`/`x` sector dumps · `L`/`l` arm/dump logic
 analyser · `B` reboot to BOOTSEL
 
-After `R` or `F` the adapter answers nothing until the Atari resets: GEMDOS still has the
-old FAT cached and its next write would corrupt C:.
+After `R` or `F` the driver reports a media change: GEMDOS drops its cached FAT and
+directories (also unwritten ones) and reads C: again, no reset needed. Until the driver has
+picked up the change the adapter answers only its own vendor command, so a stale FAT is
+never written; with another hard disk driver that means until the next Atari reset.
 
 ## System files on C:
 

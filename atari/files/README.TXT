@@ -36,7 +36,7 @@ Changing the ACSI ID
 
 README.TXT and ACSITNFS.PRG are read-only. Deleted one anyway?
   Key R on the USB console puts them back; your own files on C:
-  stay. Reset the Atari afterwards.
+  stay. No reset needed: the driver tells TOS that C: changed.
 
 USB console of the Pico (any baud rate, it is USB):
   0-7 = ACSI ID           H = hide/show           K = clock on/off

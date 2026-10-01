@@ -657,6 +657,16 @@ static uint8_t exec_cmd(const uint8_t *cdb, uint8_t cdb_len, uint32_t *bytes)
             net_clock(reply);
             *bytes = 512;
             return send_reply(512);
+        case 10:    /* media change counters for hdv_mediach, 512 bytes: "ATG",
+                       count, then one counter per partition entry. The driver
+                       now knows: GEMDOS will re-read, the adapter may answer */
+            memset(reply, 0, 512);
+            memcpy(reply, "ATG", 3);
+            reply[3] = 4;
+            for (int k = 0; k < 4; k++) reply[4 + k] = g_part_gen[k];
+            g_cfg.mute_until_reset = false;
+            *bytes = 512;
+            return send_reply(512);
         }
         break;
     }
@@ -811,7 +821,7 @@ static void __not_in_flash_func(target_loop)(void)
         if ((S_DATA(s) >> 5) != g_cfg.acsi_id) continue;
         /* hidden: no /IRQ, so TOS and hard disk drivers see an empty id */
         if (g_cfg.hidden && (S_DATA(s) & 0x1f) != 0x11) continue;
-        if (g_cfg.mute_until_reset) continue;
+        if (g_cfg.mute_until_reset && (S_DATA(s) & 0x1f) != 0x11) continue;
         handle_command(s);
     }
 }

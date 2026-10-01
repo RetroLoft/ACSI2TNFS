@@ -33,9 +33,14 @@ ACSI id wijzigen
     bij een conflict: sluit de Pico met USB aan op een pc en
     open de seriele poort met een terminalprogramma.
 
+README.TXT en ACSITNFS.PRG zijn alleen-lezen. Per ongeluk weg?
+  Toets R in de USB-console zet ze terug; je eigen bestanden op C:
+  blijven staan. Reset daarna de Atari.
+
 USB-console van de Pico (115200, maakt niet uit bij USB):
-  s = sniffer (passief)   t = target (harddisk)   0-7 = ACSI id
-  v = verbose log         i = info                B = BOOTSEL
+  0-7 = ACSI id           H = verbergen/tonen     K = klok aan/uit
+  R = systeembestanden op C: herstellen           F = C: helemaal opnieuw
+  i = info                n = netwerkstatus       B = BOOTSEL
 
 Met een Pico W / Pico 2 W: Wi-Fi, TNFS-drives en de klok stel je
 in met ACSITNFS.PRG.

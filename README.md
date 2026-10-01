@@ -73,9 +73,19 @@ changed in ways that do not need the ACSI bus:
 
 ## USB console
 
-`s` sniffer · `t` target · `0`-`7` ACSI id · `H` hide/show · `v` verbose · `i` info ·
-`d`/`x` sector dumps · `F` rewrite built-in disk · `L`/`l` arm/dump logic analyser ·
-`B` reboot to BOOTSEL
+`s` sniffer · `t` target · `0`-`7` ACSI id · `H` hide/show · `K` network clock on/off ·
+`R` restore the system files on C: · `F` rewrite C: completely · `n`/`N` network
+status/reconnect · `v` verbose · `i` info · `d`/`x` sector dumps · `L`/`l` arm/dump logic
+analyser · `B` reboot to BOOTSEL
+
+After `R` or `F` the adapter answers nothing until the Atari resets: GEMDOS still has the
+old FAT cached and its next write would corrupt C:.
+
+## System files on C:
+
+README.TXT and ACSITNFS.PRG are read-only. A new firmware brings them up to date at
+start-up and keeps every other file on C: (DESKTOP.INF, an AUTO folder, ...). A system
+file that was deleted comes back only with `R` on the USB console.
 
 ## Hardware notes
 

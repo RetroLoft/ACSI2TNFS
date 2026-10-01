@@ -147,6 +147,11 @@ uint8_t net_vdrive_letter(uint32_t k);                 /* wanted letter of parti
 void net_clock(uint8_t *out);                          /* core1: vendor sub 9 (network time) */
 uint32_t net_clock_sync_state(void);                   /* 0 off, 1 synchronised, 2 not yet */
 void net_clock_keep(void);                             /* before a watchdog reboot */
+void net_clock_toggle(void);                           /* console K */
+
+/* ACSI id change from the configuration program (acsi_core1.c) */
+void acsi_set_next_id(int id);                         /* from the next reset on */
+int acsi_next_id(void);                                /* id stored in flash */
 bool net_vread(uint32_t drive, uint32_t rel, uint32_t n, uint8_t *buf); /* core1: virtual part. */
 void vfat_bootsector(uint8_t *b);
 

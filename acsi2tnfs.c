@@ -60,7 +60,9 @@ static void cfg_write_cb(void *p)
 void cfg_save(void)
 {
     static uint8_t page[CFG_BYTES];        /* RAM: XIP is off while programming */
-    cfg_flash_t f = { CFG_MAGIC, g_cfg.mode, g_cfg.acsi_id, g_cfg.verbose, g_cfg.hidden };
+    /* the id of the next boot: a change asked for by the configuration
+       program is stored now but used only from the next reset */
+    cfg_flash_t f = { CFG_MAGIC, g_cfg.mode, (uint8_t)acsi_next_id(), g_cfg.verbose, g_cfg.hidden };
     uint32_t nlen;
     const void *net = net_settings_blob(&nlen);
     memset(page, 0xff, sizeof page);
@@ -234,7 +236,7 @@ static void help(void)
     printf("\nACSI2TNFS console. mode=%s id=%u verbose=%s%s\n",
            g_cfg.mode == MODE_SNIFF ? "SNIFF" : "TARGET", g_cfg.acsi_id, g_cfg.verbose ? "on" : "off",
            g_cfg.hidden ? "  ** HIDDEN from the Atari **" : "");
-    printf("  s=sniffer  t=target  0-7=ACSI id  v=verbose  H=hide/show  i=info  B=bootsel  h=help\n\n");
+    printf("  s=sniffer  t=target  0-7=ACSI id  v=verbose  H=hide/show  K=clock  i=info  B=bootsel  h=help\n\n");
 }
 
 static void info(void)
@@ -260,6 +262,9 @@ static void console(int ch)
         cfg_save();
         printf(g_cfg.hidden ? "-> HIDDEN: the Atari sees no device on id %u from its next boot, reset it now\n"
                             : "-> VISIBLE again on id %u, reset the Atari to boot from it\n", g_cfg.acsi_id);
+        break;
+    case 'K':
+        net_clock_toggle();
         break;
     case 'i': info(); break;
     case 'n': net_console_status(); break;

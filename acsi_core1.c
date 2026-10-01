@@ -188,7 +188,12 @@ static uint32_t pending_sample;
 static uint32_t acks;            /* /ACK pulses in current data phase    */
 static uint8_t  sense_code;      /* ACSI error code for REQUEST SENSE    */
 static uint8_t  sense_key, sense_asc;
-static int      pending_id = -1; /* new id, applied on next Atari reset  */
+static volatile int pending_id = -1; /* new id, applied on next Atari reset */
+
+/* core0 (configuration program): the id to use from the next Atari reset or
+   Pico restart. Not at once: the Atari still talks to the current id. */
+void acsi_set_next_id(int id) { pending_id = id; }
+int acsi_next_id(void) { int p = pending_id; return p >= 0 ? p : g_cfg.acsi_id; }
 
 static void set_sense(uint8_t acsi_code, uint8_t key, uint8_t asc)
 {

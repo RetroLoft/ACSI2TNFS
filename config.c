@@ -37,6 +37,8 @@
 #define CMD_REBOOT_PICO         0x041b
 #define CMD_CHECK_UPDATE        0x041c
 #define CMD_GET_STATUS          0x0480      /* ACSI2TNFS: live link / clock state */
+#define CMD_GET_ADAPTER         0x0481      /* ACSI2TNFS: ACSI id now / next */
+#define CMD_SET_ACSI_ID         0x0482      /* ACSI2TNFS: id from the next reset */
 
 enum {  /* sidetnfs_config_status_t */
     ST_OK = 0, ST_INVALID_INDEX, ST_EMPTY_SLOT, ST_INVALID_DRIVE_LETTER,
@@ -349,6 +351,20 @@ static void handle(void)
         o = put32(o, net_clock_sync_state());           /* clock: off / synced / not yet */
         o = put32(o, net_link_up() ? 1 : 0);
         break;
+
+    case CMD_GET_ADAPTER:                               /* status, id now, id after reset */
+        o = put32(o, 0);
+        o = put32(o, g_cfg.acsi_id);
+        o = put32(o, (uint32_t)acsi_next_id());
+        break;
+
+    case CMD_SET_ACSI_ID: {                             /* stored by the next SAVE_CONFIG */
+        uint32_t id = get32(q);
+        if (id > 7) { o = put32(o, 1); break; }
+        acsi_set_next_id((int)id);
+        o = put32(o, 0);
+        break;
+    }
 
     default:
         o = put32(o, 0xffffffffu);

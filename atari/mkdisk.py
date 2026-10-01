@@ -190,6 +190,10 @@ def main():
     prg = os.path.join(FILES_DIR, "ACSITNFS.PRG")
     if os.path.exists(prg):
         files.append(("ACSITNFS.PRG", open(prg, "rb").read()))
+    # any other file in files/ goes on C: as well
+    for name in sorted(os.listdir(FILES_DIR)):
+        if name.upper() not in ("README.TXT", "ACSITNFS.PRG"):
+            files.append((name.upper(), open(os.path.join(FILES_DIR, name), "rb").read()))
 
     psize = DISK_SECTORS - PSTART
     disk = bytearray(DISK_SECTORS * 512)

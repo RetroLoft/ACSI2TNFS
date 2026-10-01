@@ -140,6 +140,7 @@ enum { CLK_VALID = 0, CLK_WAIT = 1, CLK_NONE = 2, CLK_OFF = 3, CLK_NTP = 4 };
 static volatile uint8_t  clk_state = CLK_OFF;
 static volatile uint32_t clk_seq, clk_unix;    /* UTC seconds at clk_us */
 static volatile uint64_t clk_us;
+static volatile bool     clk_sync_now;          /* console K: sync without waiting */
 
 static void clock_set(uint32_t unix)
 {
@@ -226,6 +227,19 @@ void net_clock(uint8_t *out)
     out[8] = (uint8_t)(sec / 3600);
     out[9] = (uint8_t)(sec / 60 % 60);
     out[10] = (uint8_t)(sec % 60);
+}
+
+/* console K: network clock on/off (stored; active from the next Pico start) */
+void net_clock_toggle(void)
+{
+    g_stage.rtc_enabled = !g_stage.rtc_enabled;
+    if (g_stage.rtc_enabled && !g_stage.ntp_server[0]) strcpy(g_stage.ntp_server, "pool.ntp.org");
+    g_set.rtc_enabled = g_stage.rtc_enabled;
+    strcpy(g_set.ntp_server, g_stage.ntp_server);
+    if (!g_set.rtc_enabled) clk_state = CLK_OFF;
+    else if (clk_state == CLK_OFF) { clk_state = CLK_NTP; clk_sync_now = true; }
+    cfg_save();
+    printf("network clock %s\n", g_set.rtc_enabled ? "ON" : "OFF");
 }
 
 /* configuration program status: 0 disabled, 1 synchronised, 2 not synchronised */
@@ -1260,7 +1274,8 @@ void net_init(void)
 
 void net_poll(void)
 {
-    if (g_set.rtc_enabled && !test_req && net_link_up() && time_reached(ntp_next)) {
+    if (g_set.rtc_enabled && !test_req && net_link_up() && (clk_sync_now || time_reached(ntp_next))) {
+        clk_sync_now = false;
         bool ok = ntp_sync();
         if (ok) ntp_fails = 0;
         else if (ntp_fails < NTP_FAST_RETRIES && ++ntp_fails >= NTP_FAST_RETRIES &&

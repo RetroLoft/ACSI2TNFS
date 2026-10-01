@@ -128,7 +128,8 @@ def fat16_partition(psize, files):
             chunk = data[i * SPC * bps:(i + 1) * SPC * bps]
             img[off:off + len(chunk)] = chunk
         nextcl += ncls
-        struct.pack_into("<11sB10xHHHI", rootdir, ent * 32, n83, 0x00, tm, dt, first, len(data))
+        # system files: read-only (the firmware keeps them up to date, console R restores them)
+        struct.pack_into("<11sB10xHHHI", rootdir, ent * 32, n83, 0x01, tm, dt, first, len(data))
         ent += 1
     if fat12:
         fat += [0] * (len(fat) & 1)

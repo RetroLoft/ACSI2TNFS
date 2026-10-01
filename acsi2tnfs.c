@@ -236,7 +236,7 @@ static void help(void)
     printf("\nACSI2TNFS console. mode=%s id=%u verbose=%s%s\n",
            g_cfg.mode == MODE_SNIFF ? "SNIFF" : "TARGET", g_cfg.acsi_id, g_cfg.verbose ? "on" : "off",
            g_cfg.hidden ? "  ** HIDDEN from the Atari **" : "");
-    printf("  s=sniffer  t=target  0-7=ACSI id  v=verbose  H=hide/show  K=clock  i=info  B=bootsel  h=help\n\n");
+    printf("  s=sniffer  t=target  0-7=ACSI id  v=verbose  H=hide/show  K=clock  R=restore C: files  i=info  B=bootsel  h=help\n\n");
 }
 
 static void info(void)
@@ -269,11 +269,26 @@ static void console(int ch)
     case 'i': info(); break;
     case 'n': net_console_status(); break;
     case 'N': printf("network test requested\n"); net_request_test(); break;
+    case 'R':
+        /* restore the system files without touching the user's files; the
+           Atari must not use C: meanwhile and has the old FAT cached */
+        g_cfg.mute_until_reset = true;
+        sleep_ms(100);                      /* a running command finishes */
+        acsi_stage_invalidate();
+        {
+            int n = sysfiles_sync(disk_seed, true);
+            if (n < 0) printf("!! restoring the system files failed\n");
+            else printf("%d system file(s) restored or updated\n", n);
+        }
+        printf("** RESET THE ATARI NOW: the adapter answers nothing until then **\n");
+        break;
     case 'F':
-        disk_seed_write();
         /* the Atari still has the old FAT and directories cached: keep it
            off the bus until it resets, or its next write corrupts C: */
         g_cfg.mute_until_reset = true;
+        sleep_ms(100);                      /* a running command finishes */
+        acsi_stage_invalidate();
+        disk_seed_write();
         printf("** RESET THE ATARI NOW: the adapter answers nothing until then **\n");
         break;
     case 'L': la_done = false; la_armed = true; printf("logic analyser armed (next WRITE)\n"); break;
@@ -351,7 +366,12 @@ int main(void)
     t_origin = time_us_32();
     sleep_ms(50);                       /* core1 registers as flash lockout victim */
     bool need_seed = !disk_seeded();
-    if (need_seed) disk_seed_write_part(!disk_same_layout());
+    bool full_seed = need_seed && !disk_same_layout();
+    if (need_seed) disk_seed_write_part(full_seed);
+    /* new firmware: bring README.TXT / ACSITNFS.PRG on C: up to date, keep
+       the user's own files (a deleted system file is only restored with R) */
+    if (!full_seed && sysfiles_sync(disk_seed, false) > 0)
+        g_cfg.mute_until_reset = true;      /* a running Atari has the old FAT cached */
 
     uint32_t last_hb = 0;
     bool was_connected = false;

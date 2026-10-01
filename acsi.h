@@ -150,6 +150,11 @@ uint32_t net_clock_sync_state(void);                   /* 0 off, 1 synchronised,
 void net_clock_keep(void);                             /* before a watchdog reboot */
 void net_clock_toggle(void);                           /* console K */
 
+/* system files on C: (sysfiles.c): number written, -1 on error */
+int sysfiles_sync(const uint8_t *image, bool restore_missing);
+/* core0 changed the flash disk: core1 must re-read its write block */
+void acsi_stage_invalidate(void);
+
 /* ACSI id change from the configuration program (acsi_core1.c) */
 void acsi_set_next_id(int id);                         /* from the next reset on */
 int acsi_next_id(void);                                /* id stored in flash */

@@ -48,7 +48,7 @@ add_custom_command(
     VERBATIM)
 add_custom_target(atari_disk DEPENDS ${CMAKE_CURRENT_LIST_DIR}/disk_seed.h)
 
-add_executable(acsi2tnfs acsi2tnfs.c acsi_core1.c net.c config.c)
+add_executable(acsi2tnfs acsi2tnfs.c acsi_core1.c net.c config.c sysfiles.c)
 add_dependencies(acsi2tnfs atari_disk)
 
 # Wi-Fi boards (pico_w, pico2_w): lwIP + CYW43, background mode on core0

@@ -366,6 +366,11 @@ static bool stage_flush(void)
     return flash_safe_execute(flash_commit_cb, NULL, 1000) == PICO_OK;
 }
 
+void acsi_stage_invalidate(void)
+{
+    if (!stage_dirty) stage_blk = -1;
+}
+
 static void stage_select(uint32_t blk)
 {
     if ((int32_t)blk == stage_blk) return;
@@ -774,6 +779,8 @@ static void __not_in_flash_func(target_loop)(void)
             if (!in_reset) {
                 in_reset = true;
                 g_cfg.mute_until_reset = false;     /* fresh GEMDOS: safe again */
+                stage_flush();                      /* core0 may change C: now */
+                stage_blk = -1;
                 bus_idle();
                 g_stats.resets++;
                 ev_push(EV_RESET, 0, 0);

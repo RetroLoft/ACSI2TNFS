@@ -66,9 +66,9 @@ at the same time. Then the Atari cannot reach the adapter either, so the id can 
 changed in ways that do not need the ACSI bus:
 
 - USB console: keys `0`-`7` (always works, also during a conflict)
+- ACSITNFS.PRG: Config > More > ACSI device ID (used after Save and a restart)
 - CONFIG.TOS: option 2 (applied at the next Atari reset)
-- planned: the configuration program ACSITNFS.PRG and the BOOT button of the
-  Pimoroni Pico Plus 2 W
+- planned: the BOOT button of the Pimoroni Pico Plus 2 W
 
 ## USB console
 

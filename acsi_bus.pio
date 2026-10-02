@@ -75,9 +75,10 @@ fall:
     jmp pin fall            ; ... unless it is high again: switching noise glitch
     set pins, 0             ; release /DRQ
 public fetch:
-    pull block              ; fetch the next byte while /ACK is still low,
-    wait 1 gpio 18          ; so it is on the bus one cycle after /ACK rises
-.wrap
+    pull block              ; fetch the next byte while /ACK is still low
+    wait 1 gpio 18 [3]      ; hold the byte ~50 ns after /ACK rises, as the ST
+.wrap                       ; does on writes: switching right at the edge gave
+                            ; the ST now and then the next byte (1 in 300 KB)
 
 ; ---------------------------------------------------------------------------
 ; SM3: DMA data from Atari to device (Atari "write").
@@ -85,7 +86,11 @@ public fetch:
 ; On writes the ST sometimes gives short, back-to-back /ACK pulses (slow
 ; /DRQ release + DMA FIFO refill), and the byte is not always on the bus at
 ; the falling edge. So: sample continuously while /ACK is low and keep the
-; last value before the rising edge (data valid up to 10 ns after it).
+; last value before the rising edge.
+; Push the sample from BEFORE the check that saw /ACK high: the newest one may
+; have been taken just after the edge, when the ST already puts the next byte
+; on the bus (seen: a byte now and then got the value of the byte after it).
+; The one before it was taken while /ACK was certainly still low.
 ; The RX FIFO is emptied by RP2040 DMA, so this SM never stalls.
 ; ---------------------------------------------------------------------------
 .program acsi_din
@@ -96,11 +101,14 @@ fall:
     wait 0 gpio 18 [2]
     jmp pin fall            ; glitch filter, see acsi_dout
     set pins, 0             ; release /DRQ
+    mov isr, pins           ; /ACK is low here
 low:
+    mov x, isr              ; last sample taken while /ACK was low
     mov isr, pins
     jmp pin high
     jmp low
 high:
+    mov isr, x
     push block
 .wrap
 

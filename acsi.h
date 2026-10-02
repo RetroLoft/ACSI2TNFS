@@ -167,6 +167,7 @@ void acsi_stage_invalidate(void);
 void acsi_set_next_id(int id);                         /* from the next reset on */
 int acsi_next_id(void);                                /* id stored in flash */
 bool net_vread(uint32_t drive, uint32_t rel, uint32_t n, uint8_t *buf); /* core1: virtual part. */
+bool net_vwrite(uint32_t drive, uint32_t rel, uint32_t n, uint8_t *buf);
 void vfat_bootsector(uint8_t *b);
 
 /* SideTNFS configuration protocol over ACSI (config.c) */

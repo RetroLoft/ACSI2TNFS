@@ -497,9 +497,20 @@ static bool dma_in(uint8_t *buf, uint32_t len)
 
 static uint8_t write_sectors(uint32_t lba, uint32_t n)
 {
-    if (BOARD_HAS_WIFI && lba >= VFAT_START) {         /* TNFS drive is read-only (for now) */
-        set_sense(0x03, 0x07, 0x27);                    /* data protect / write protected */
-        return 0x02;
+    if (BOARD_HAS_WIFI && lba >= VFAT_START) {         /* virtual TNFS partition */
+        uint32_t drive = (lba - VFAT_START) / VFAT_STRIDE;
+        uint32_t rel = (lba - VFAT_START) % VFAT_STRIDE;
+        if (drive >= net_vdrives() || rel + n > VFAT_SECTORS || n > WBUF_SECTORS) {
+            set_sense(0x21, 0x05, 0x21);
+            return 0x02;
+        }
+        if (!dma_in(wbuf, n * 512u)) return 0x02;
+        if (!net_vwrite(drive, rel, n, wbuf)) {
+            set_sense(0x03, 0x03, 0x0c);                /* medium error: write error */
+            return 0x02;
+        }
+        g_stats.sectors_written += n;
+        return 0x00;
     }
     if (lba + n > DISK_SECTORS || lba + n < lba) {
         set_sense(0x21, 0x05, 0x21);

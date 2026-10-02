@@ -239,9 +239,10 @@ uint32_t net_clock_sync_state(void)
 
 /* ---------------- virtual partition: core1 <-> core0 hand-over ---------------- */
 
-/* core1 posts a sector request, core0 (network) fills the buffer */
+/* core1 posts a sector request, core0 (network) fills or stores the buffer */
 static volatile int      vreq_state;         /* 0 idle, 1 pending, 2 done, 3 failed */
 static volatile uint32_t vreq_drive, vreq_rel, vreq_n;
+static volatile bool     vreq_write;
 static uint8_t *volatile vreq_buf;
 
 #define VB_SPC      2
@@ -269,16 +270,14 @@ void vfat_bootsector(uint8_t *b)
     b[510] = 0x55; b[511] = 0xaa;
 }
 
-/* core1: read n sectors of virtual partition 'drive' into buf */
-bool net_vread(uint32_t drive, uint32_t rel, uint32_t n, uint8_t *buf)
+static bool vreq_run(uint32_t drive, uint32_t rel, uint32_t n, uint8_t *buf, bool write)
 {
-    if (!BOARD_HAS_WIFI) return false;
-    if (rel == 0 && n == 1) { vfat_bootsector(buf); return true; }
     if (vreq_state == 1) return false;          /* core0 still busy */
     vreq_buf = buf;
     vreq_drive = drive;
     vreq_rel = rel;
     vreq_n = n;
+    vreq_write = write;
     __dmb();
     vreq_state = 1;
     uint32_t t0 = time_us_32();
@@ -287,6 +286,21 @@ bool net_vread(uint32_t drive, uint32_t rel, uint32_t n, uint8_t *buf)
         if (time_us_32() - t0 > 9000000) return false;
     }
     return vreq_state == 2;
+}
+
+/* core1: read n sectors of virtual partition 'drive' into buf */
+bool net_vread(uint32_t drive, uint32_t rel, uint32_t n, uint8_t *buf)
+{
+    if (!BOARD_HAS_WIFI) return false;
+    if (rel == 0 && n == 1) { vfat_bootsector(buf); return true; }
+    return vreq_run(drive, rel, n, buf, false);
+}
+
+/* core1: write n sectors from buf to virtual partition 'drive' */
+bool net_vwrite(uint32_t drive, uint32_t rel, uint32_t n, uint8_t *buf)
+{
+    if (!BOARD_HAS_WIFI) return false;
+    return vreq_run(drive, rel, n, buf, true);
 }
 
 #if !BOARD_HAS_WIFI
@@ -425,7 +439,7 @@ typedef struct {
     unsigned vmaj, vmin;
     /* tree: nodes root .. node_end-1 of vn[], cluster owners valloc[va0 .. va0+van-1] */
     uint16_t root, node_end, node_limit;
-    uint32_t pool_limit;
+    uint32_t pool_end, pool_limit;
     uint16_t va0, van;
     uint32_t files, dirs, skipped;
     volatile bool ready;
@@ -433,6 +447,10 @@ typedef struct {
     int      vf_node;
     uint8_t  vf_handle;
     uint32_t vf_pos;
+    /* writes: every written sector lives in a hidden file on the server */
+    bool     tmp_open, wr_pending;
+    uint8_t  tmp_handle;
+    uint32_t last_wr_ms;
     char     status[96];
     char     dir[160];              /* top level names, for the info text    */
 } vdrive_t;
@@ -803,7 +821,7 @@ static void tnfs_unmount(void)
 static uint16_t le16(const uint8_t *p) { return (uint16_t)(p[0] | (p[1] << 8)); }
 static uint32_t le32(const uint8_t *p) { return p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24); }
 
-/* ---------------- virtual FAT16 over TNFS (read-only) ----------------
+/* ---------------- virtual FAT16 over TNFS ----------------
  *
  * Partition layout (VFAT_SECTORS sectors of 512 bytes, 2 per cluster):
  *   0                      boot sector (BPB)
@@ -831,12 +849,29 @@ static uint32_t le32(const uint8_t *p) { return p[0] | (p[1] << 8) | (p[2] << 16
 typedef struct {
     uint16_t parent;                /* the drive's root node: itself */
     uint16_t child_start, child_count;
-    uint16_t first_cl, ncl;
+    uint16_t first_cl, ncl;         /* generated cluster run (scan)          */
+    uint16_t start_cl;              /* start cluster as GEMDOS has it now    */
     uint8_t  isdir;
+    uint8_t  flags;                 /* VF_*                                  */
     char     n83[11];
     uint32_t size, mtime;
     uint32_t name_off;
+    uint32_t sig;                   /* cluster chain at the last sync        */
 } vnode_t;
+
+#define VF_RO       0x01            /* no write permission on the server     */
+#define VF_DEL      0x02            /* deleted on the server                 */
+#define VF_SEEN     0x04            /* found again by the current sync       */
+
+#define TMP_NAME    "/.A2T.TMP"     /* hidden: the scan skips names with '.' */
+#define NODE_SPARE  64              /* room per drive for new files and dirs */
+#define POOL_SPARE  2048
+
+/* per drive: sector written since the scan (data in TMP_NAME), and since the
+   last sync */
+static uint8_t wbits[VDRIVES_MAX][(VFAT_SECTORS + 7) / 8];
+static uint8_t dbits[VDRIVES_MAX][(VFAT_SECTORS + 7) / 8];
+#define BIT(m, r)   ((m)[(r) >> 3] & (1u << ((r) & 7)))
 
 static vnode_t  vn[VNODES];
 static uint16_t vn_count;
@@ -900,13 +935,14 @@ static void make83(uint16_t d, const char *name, char out[11])
     }
 }
 
-/* STAT: fills size, mtime, isdir */
-static bool tnfs_stat(const char *path, uint32_t *size, uint32_t *mtime, bool *isdir)
+/* STAT: fills size, mtime, isdir, ro (nobody may write) */
+static bool tnfs_stat(const char *path, uint32_t *size, uint32_t *mtime, bool *isdir, bool *ro)
 {
     int n = tnfs_req(0x24, path, (int)strlen(path) + 1);
     if (n < 5 + 22 || rx[4] != 0) return false;
     uint16_t mode = le16(rx + 5);
     *isdir = (mode & 0170000) == 0040000;
+    *ro = (mode & 0222) == 0;
     *size  = le32(rx + 11);
     *mtime = le32(rx + 19);
     return true;
@@ -933,12 +969,13 @@ static void vscan_dir(uint16_t d)
             vpool_len + strlen(name) + 1 > dr->pool_limit) { dr->skipped++; continue; }
         snprintf(child, sizeof child, "%s%s%s", path, strcmp(path, "/") ? "/" : "", name);
         uint32_t size = 0, mtime = 0;
-        bool isdir = false;
-        if (!tnfs_stat(child, &size, &mtime, &isdir)) { dr->skipped++; continue; }
+        bool isdir = false, ro = false;
+        if (!tnfs_stat(child, &size, &mtime, &isdir, &ro)) { dr->skipped++; continue; }
         uint16_t i = vn_count++;
         memset(&vn[i], 0, sizeof vn[i]);
         vn[i].parent = d;
         vn[i].isdir = isdir;
+        vn[i].flags = ro && !isdir ? VF_RO : 0;
         vn[i].size = isdir ? 0 : size;
         vn[i].mtime = mtime;
         vn[i].name_off = vpool_len;
@@ -949,6 +986,16 @@ static void vscan_dir(uint16_t d)
         if (isdir) dr->dirs++; else dr->files++;
     }
     tnfs_req(0x12, &h, 1);                                  /* CLOSEDIR */
+}
+
+/* signature of a cluster chain: changes with any cluster or the length */
+static uint32_t sig_add(uint32_t sig, uint32_t c) { return sig * 31u + c; }
+
+static uint32_t run_sig(uint32_t first, uint32_t n)
+{
+    uint32_t s = 0;
+    for (uint32_t i = 0; i < n; i++) s = sig_add(s, first + i);
+    return s;
 }
 
 /* scan the current drive into the next free part of the node table */
@@ -987,12 +1034,24 @@ static void vfat_scan(void)
             vn[i].size = 0;
             d->skipped++;
         }
-        vn[i].first_cl = ncl ? (uint16_t)next : 0;
+        vn[i].first_cl = vn[i].start_cl = ncl ? (uint16_t)next : 0;
         vn[i].ncl = (uint16_t)ncl;
+        vn[i].sig = run_sig(vn[i].first_cl, ncl);
         if (ncl) valloc[valloc_n++] = i;
         next += ncl;
     }
     d->van = (uint16_t)(valloc_n - d->va0);
+
+    /* keep room for files and directories the Atari creates */
+    d->pool_end = vpool_len;
+    if (d->node_limit > d->node_end + NODE_SPARE) d->node_limit = (uint16_t)(d->node_end + NODE_SPARE);
+    if (d->pool_limit > d->pool_end + POOL_SPARE) d->pool_limit = d->pool_end + POOL_SPARE;
+    vn_count = d->node_limit;
+    vpool_len = d->pool_limit;
+    int k = (int)(d - vd);
+    memset(wbits[k], 0, sizeof wbits[k]);
+    memset(dbits[k], 0, sizeof dbits[k]);
+    d->tmp_open = d->wr_pending = false;
     __dmb();
     d->ready = true;
 }
@@ -1062,8 +1121,8 @@ static void vdir_entry(uint16_t d, uint32_t k, uint8_t *e)
     }
     if (k >= vn[d].child_count) return;
     const vnode_t *v = &vn[vn[d].child_start + k];
-    /* files read-only: this version cannot write to the server */
-    vdirent(e, v->n83, v->isdir ? 0x10 : 0x01, v->mtime, v->first_cl, v->size);
+    vdirent(e, v->n83, v->isdir ? 0x10 : (v->flags & VF_RO) ? 0x01 : 0x00,
+            v->mtime, v->first_cl, v->size);
 }
 
 /* open file handle cache (one per drive) */
@@ -1111,12 +1170,113 @@ static bool vfile_read(uint16_t node, uint32_t off, uint8_t *dst, uint32_t len)
     return true;
 }
 
+/* ---------------- writing ----------------
+ *
+ * GEMDOS writes plain sectors: data first, to clusters that are still free,
+ * then (at Fclose) the FAT and the directory entry that say which file the
+ * data belongs to. So every written sector goes to TMP_NAME on the server at
+ * offset rel * 512 and is read back from there: the Atari always sees what it
+ * wrote. When the Atari has written nothing for a second, vsync() walks the
+ * directory tree as GEMDOS has it now and applies the differences to the
+ * server: new, changed, renamed and deleted files and directories.
+ */
+#define TO_RDONLY   0x0001
+#define TO_WRONLY   0x0002
+#define TO_RDWR     0x0003
+#define TO_CREAT    0x0100
+#define TO_TRUNC    0x0200
+
+static bool tnfs_open(const char *path, uint16_t flags, uint8_t *h)
+{
+    uint8_t req[300];
+    req[0] = flags & 0xff; req[1] = flags >> 8;
+    req[2] = 0xa4; req[3] = 0x01;                          /* mode 0644 */
+    int pl = snprintf((char *)req + 4, sizeof req - 4, "%s", path);
+    int n = tnfs_req(0x29, req, 4 + pl + 1);
+    if (n < 6 || rx[4] != 0) return false;
+    *h = rx[5];
+    return true;
+}
+
+static bool tnfs_seek(uint8_t h, uint32_t off)
+{
+    uint8_t req[6] = { h, 0 };                             /* SEEK_SET */
+    put32(req + 2, off);
+    int n = tnfs_req(0x25, req, 6);
+    return n >= 5 && rx[4] == 0;
+}
+
+static bool tnfs_write(uint8_t h, const uint8_t *buf, uint16_t len)
+{
+    static uint8_t req[3 + 512];
+    req[0] = h; req[1] = len & 0xff; req[2] = len >> 8;
+    memcpy(req + 3, buf, len);
+    int n = tnfs_req(0x22, req, 3 + len);
+    return n >= 7 && rx[4] == 0 && le16(rx + 5) == len;
+}
+
+static void tnfs_close(uint8_t h) { tnfs_req(0x23, &h, 1); }
+
+/* UNLINK, MKDIR, RMDIR: one path; false with the error in rx[4] */
+static bool tnfs_path(uint8_t cmd, const char *path)
+{
+    int n = tnfs_req(cmd, path, (int)strlen(path) + 1);
+    return n >= 5 && rx[4] == 0;
+}
+
+static bool tnfs_rename(const char *from, const char *to)
+{
+    static char req[512];
+    int a = (int)strlen(from) + 1, b = (int)strlen(to) + 1;
+    if (a + b > (int)sizeof req) return false;
+    memcpy(req, from, (size_t)a);
+    memcpy(req + a, to, (size_t)b);
+    int n = tnfs_req(0x28, req, a + b);
+    return n >= 5 && rx[4] == 0;
+}
+
+/* one sector of TMP_NAME */
+static bool tmp_io(uint32_t rel, uint8_t *buf, bool write)
+{
+    vdrive_t *d = cur;
+    if (!d->tmp_open) {
+        if (!tnfs_open(TMP_NAME, TO_RDWR | TO_CREAT | TO_TRUNC, &d->tmp_handle)) {
+            printf("net: cannot create %s: %s (0x%02x)\n", TMP_NAME, tnfs_err(rx[4]), rx[4]);
+            return false;
+        }
+        d->tmp_open = true;
+    }
+    if (!tnfs_seek(d->tmp_handle, rel * 512u)) return false;
+    if (write) return tnfs_write(d->tmp_handle, buf, 512);
+    uint8_t req[3] = { d->tmp_handle, 0x00, 0x02 };        /* 512 bytes */
+    int n = tnfs_req(0x21, req, 3);
+    if (n < 7 || rx[4] != 0) return false;
+    uint16_t got = le16(rx + 5);
+    if (got > 512 || got > n - 7) return false;
+    memcpy(buf, rx + 7, got);
+    return true;
+}
+
+static bool vfat_write(uint32_t rel, const uint8_t *buf)
+{
+    vdrive_t *d = cur;
+    int k = (int)(d - vd);
+    if (rel == 0) return true;                              /* boot sector: fixed */
+    if (!d->ready || !tmp_io(rel, (uint8_t *)buf, true)) return false;
+    wbits[k][rel >> 3] |= (uint8_t)(1u << (rel & 7));
+    dbits[k][rel >> 3] |= (uint8_t)(1u << (rel & 7));
+    d->wr_pending = true;
+    d->last_wr_ms = to_ms_since_boot(get_absolute_time());
+    return true;
+}
+
 /* one sector of the current drive's virtual partition */
 static bool vfat_sector(uint32_t rel, uint8_t *buf)
 {
     vdrive_t *d = cur;
     memset(buf, 0, 512);
     if (rel == 0) { vfat_bootsector(buf); return true; }
+    if (BIT(wbits[d - vd], rel)) return tmp_io(rel, buf, false);   /* written by the Atari */
     if (rel < 1 + 2 * V_SPF) {                              /* FAT 1 and FAT 2 */
         uint32_t c0 = ((rel - 1) % V_SPF) * 256;
         for (uint32_t i = 0; i < 256; i++) {
@@ -1142,7 +1302,7 @@ static bool vfat_sector(uint32_t rel, uint8_t *buf)
     uint32_t c = 2 + (rel - V_DATREC) / V_SPC;
     uint32_t s = (rel - V_DATREC) % V_SPC;
     int nd = vfind(c);
-    if (nd < 0) return true;
+    if (nd < 0 || (vn[nd].flags & VF_DEL)) return true;     /* free or deleted: zeros */
     uint32_t off = ((c - vn[nd].first_cl) * V_SPC + s) * 512;
     if (vn[nd].isdir) {
         for (uint32_t k = 0; k < 16; k++) vdir_entry((uint16_t)nd, off / 32 + k, buf + k * 32);
@@ -1153,6 +1313,252 @@ static bool vfat_sector(uint32_t rel, uint8_t *buf)
     return vfile_read((uint16_t)nd, off, buf, len > 512 ? 512 : len);
 }
 
+/* ---------------- sync: the Atari's view -> the server ---------------- */
+
+static uint8_t fsec[512];                   /* last FAT sector read by vfat_get */
+static int32_t fsec_rel = -1;
+
+static bool valid_cl(uint32_t c) { return c >= 2 && c < V_NCL + 2; }
+
+/* FAT entry of cluster c as GEMDOS has it now */
+static uint32_t vfat_get(uint32_t c)
+{
+    uint32_t rel = 1 + c / 256;
+    if ((int32_t)rel != fsec_rel) {
+        if (!vfat_sector(rel, fsec)) { fsec_rel = -1; return 0xffff; }
+        fsec_rel = (int32_t)rel;
+    }
+    return le16(fsec + (c % 256) * 2);
+}
+
+/* chain from cluster c: its signature, and whether the Atari wrote one of
+   its sectors since the last sync */
+static uint32_t chain_info(uint32_t c, bool *dirty)
+{
+    const uint8_t *db = dbits[cur - vd];
+    uint32_t sig = 0;
+    *dirty = false;
+    for (uint32_t i = 0; valid_cl(c) && i < V_NCL; i++) {
+        sig = sig_add(sig, c);
+        uint32_t rel = V_DATREC + (c - 2) * V_SPC;
+        for (uint32_t s = 0; s < V_SPC; s++)
+            if (BIT(db, rel + s)) *dirty = true;
+        c = vfat_get(c);
+    }
+    return sig;
+}
+
+/* "NAME    EXT" -> "NAME.EXT" */
+static void n83_str(const char *n83, char *out)
+{
+    int o = 0;
+    for (int i = 0; i < 8 && n83[i] != ' '; i++) out[o++] = n83[i];
+    if (n83[8] != ' ') {
+        out[o++] = '.';
+        for (int i = 8; i < 11 && n83[i] != ' '; i++) out[o++] = n83[i];
+    }
+    out[o] = 0;
+}
+
+/* server path of a (new) name in directory node dir */
+static void child_path(uint16_t dir, const char *n83, char *buf, int max)
+{
+    char name[13];
+    n83_str(n83, name);
+    int n = vpath(dir, buf, max);
+    snprintf(buf + n, (size_t)(max - n), "%s%s", n > 1 ? "/" : "", name);
+}
+
+/* give node i the name n83 in directory dir */
+static bool vnode_place(uint16_t i, uint16_t dir, const char *n83)
+{
+    vdrive_t *d = cur;
+    char name[13];
+    n83_str(n83, name);
+    size_t l = strlen(name) + 1;
+    if (d->pool_end + l > d->pool_limit) return false;
+    memcpy(vpool + d->pool_end, name, l);
+    vn[i].name_off = d->pool_end;
+    d->pool_end += (uint32_t)l;
+    memcpy(vn[i].n83, n83, 11);
+    vn[i].parent = dir;
+    return true;
+}
+
+static int vnode_new(uint16_t dir, const char *n83, bool isdir)
+{
+    vdrive_t *d = cur;
+    if (d->node_end >= d->node_limit) return -1;
+    uint16_t i = d->node_end;
+    memset(&vn[i], 0, sizeof vn[i]);
+    if (!vnode_place(i, dir, n83)) return -1;
+    vn[i].isdir = isdir;
+    vn[i].start_cl = 0xffff;                                /* never synced */
+    vn[i].size = 0xffffffffu;
+    d->node_end++;
+    return i;
+}
+
+/* write file node n (size bytes, chain from cluster c) to the server. With
+   every sector written by the Atari it goes straight into the file; else a
+   new file is built next to it from the old data and the new, then swapped. */
+static bool vbuild(uint16_t n, uint32_t c, uint32_t size)
+{
+    static char path[256], tmp[256];
+    static uint8_t sec[512];
+    const uint8_t *wb = wbits[cur - vd];
+    vpath(n, path, sizeof path);
+
+    bool direct = true;
+    uint32_t left = size, cc = c;
+    for (uint32_t i = 0; left && valid_cl(cc) && i < V_NCL; i++, cc = vfat_get(cc))
+        for (uint32_t s = 0; s < V_SPC && left; s++) {
+            if (!BIT(wb, V_DATREC + (cc - 2) * V_SPC + s)) direct = false;
+            left -= left > 512 ? 512 : left;
+        }
+    if (direct) {
+        snprintf(tmp, sizeof tmp, "%s", path);
+    } else {
+        int k = vpath(vn[n].parent, tmp, sizeof tmp);
+        snprintf(tmp + k, sizeof tmp - (size_t)k, "%s.A2T.NEW", k > 1 ? "/" : "");
+    }
+    uint8_t h;
+    if (!tnfs_open(tmp, TO_WRONLY | TO_CREAT | TO_TRUNC, &h)) {
+        printf("sync: cannot create %s: %s (0x%02x)\n", tmp, tnfs_err(rx[4]), rx[4]);
+        return false;
+    }
+    bool ok = true;
+    left = size; cc = c;
+    for (uint32_t i = 0; ok && left && valid_cl(cc) && i < V_NCL; i++, cc = vfat_get(cc))
+        for (uint32_t s = 0; ok && s < V_SPC && left; s++) {
+            uint16_t len = left > 512 ? 512 : (uint16_t)left;
+            ok = vfat_sector(V_DATREC + (cc - 2) * V_SPC + s, sec) && tnfs_write(h, sec, len);
+            left -= len;
+        }
+    tnfs_close(h);
+    if (left) ok = false;                                   /* FAT not complete (yet) */
+    if (ok && !direct) {
+        vfile_close();
+        tnfs_path(0x26, path);                              /* old version, if any */
+        ok = tnfs_rename(tmp, path);
+    }
+    return ok;
+}
+
+/* one directory entry e in directory node dir: match it with a node, create,
+   rename or rewrite on the server as needed */
+static void vsync_entry(uint16_t dir, const uint8_t *e, uint16_t *queue, int *nq, int *acts)
+{
+    static char path[256], path2[256];
+    vdrive_t *d = cur;
+    const char *n83 = (const char *)e;
+    bool isdir = (e[11] & 0x10) != 0;
+    uint32_t c = le16(e + 26), size = isdir ? 0 : le32(e + 28);
+    int n = -1;
+
+    /* same name in the same directory */
+    for (uint16_t i = d->root + 1; i < d->node_end && n < 0; i++)
+        if (!(vn[i].flags & (VF_DEL | VF_SEEN)) && vn[i].parent == dir &&
+            vn[i].isdir == isdir && !memcmp(vn[i].n83, n83, 11))
+            n = i;
+    /* same start cluster under another name or in another directory */
+    for (uint16_t i = d->root + 1; i < d->node_end && n < 0 && valid_cl(c); i++)
+        if (!(vn[i].flags & (VF_DEL | VF_SEEN)) && vn[i].start_cl == c && vn[i].isdir == isdir) {
+            vpath(i, path, sizeof path);
+            child_path(dir, n83, path2, sizeof path2);
+            vfile_close();
+            bool ok = tnfs_rename(path, path2);
+            printf("sync: rename %s -> %s %s\n", path, path2, ok ? "ok" : tnfs_err(rx[4]));
+            (*acts)++;
+            if (ok && vnode_place(i, dir, n83)) n = i;
+        }
+    if (n < 0) {
+        n = vnode_new(dir, n83, isdir);
+        if (n < 0) { printf("sync: no room for %.11s\n", n83); return; }
+        if (isdir) {
+            vpath((uint16_t)n, path, sizeof path);
+            bool ok = tnfs_path(0x13, path);
+            printf("sync: mkdir %s %s\n", path, ok ? "ok" : tnfs_err(rx[4]));
+            (*acts)++;
+        }
+    }
+    vn[n].flags |= VF_SEEN;
+    if (isdir) {
+        vn[n].start_cl = (uint16_t)c;
+        queue[(*nq)++] = (uint16_t)n;
+        return;
+    }
+    bool dirty;
+    uint32_t sig = chain_info(c, &dirty);
+    if (dirty || size != vn[n].size || c != vn[n].start_cl || sig != vn[n].sig) {
+        bool ok = vbuild((uint16_t)n, c, size);
+        vpath((uint16_t)n, path, sizeof path);
+        printf("sync: write %s, %lu bytes %s\n", path, (unsigned long)size, ok ? "ok" : "FAILED");
+        (*acts)++;
+        if (ok) { vn[n].size = size; vn[n].start_cl = (uint16_t)c; vn[n].sig = sig; }
+    }
+}
+
+/* the Atari wrote to the current drive and is quiet now: walk the directory
+   tree as GEMDOS has it and bring the server in line */
+static void vsync(void)
+{
+    static uint8_t sec[512];
+    static uint16_t queue[VNODES];
+    static char path[256];
+    vdrive_t *d = cur;
+    uint32_t t0 = to_ms_since_boot(get_absolute_time());
+    int nq = 0, acts = 0;
+
+    fsec_rel = -1;
+    for (uint16_t i = d->root; i < d->node_end; i++) vn[i].flags &= (uint8_t)~VF_SEEN;
+    vn[d->root].flags |= VF_SEEN;
+    queue[nq++] = d->root;
+    for (int qi = 0; qi < nq; qi++) {
+        uint16_t dir = queue[qi];
+        bool root = dir == d->root;
+        uint32_t c = vn[dir].start_cl, rel0 = 1 + 2 * V_SPF, nsec = root ? V_RDLEN : V_SPC;
+        bool end = false;
+        for (uint32_t i = 0; !end && i < V_NCL; i++) {
+            if (!root) {
+                if (!valid_cl(c)) break;
+                rel0 = V_DATREC + (c - 2) * V_SPC;
+            }
+            for (uint32_t s = 0; !end && s < nsec; s++) {
+                if (!vfat_sector(rel0 + s, sec)) {
+                    printf("sync: read error, try again later\n");
+                    d->last_wr_ms = to_ms_since_boot(get_absolute_time());
+                    return;
+                }
+                for (int k = 0; k < 16 && !end; k++) {
+                    const uint8_t *e = sec + 32 * k;
+                    if (e[0] == 0) end = true;
+                    else if (e[0] != 0xe5 && e[0] != '.' && !(e[11] & 0x08))   /* not deleted, ., .., label */
+                        vsync_entry(dir, e, queue, &nq, &acts);
+                }
+            }
+            if (root) break;
+            c = vfat_get(c);
+        }
+    }
+    /* nodes GEMDOS no longer has: children before their directory */
+    for (int i = d->node_end - 1; i > d->root; i--) {
+        vnode_t *v = &vn[i];
+        if (v->flags & (VF_SEEN | VF_DEL)) continue;
+        vpath((uint16_t)i, path, sizeof path);
+        vfile_close();
+        bool ok = tnfs_path(v->isdir ? 0x14 : 0x26, path);
+        printf("sync: %s %s %s\n", v->isdir ? "rmdir" : "delete", path, ok ? "ok" : tnfs_err(rx[4]));
+        v->flags |= VF_DEL;
+        acts++;
+    }
+    vfile_close();
+    memset(dbits[d - vd], 0, sizeof dbits[0]);
+    d->wr_pending = false;
+    printf("sync: TNFS %d, %d change(s), %lu ms\n", (int)(d - vd) + 1, acts,
+           (unsigned long)(to_ms_since_boot(get_absolute_time()) - t0));
+}
+
 /* close and unmount every drive */
 static void drives_down(void)
 {
@@ -1160,6 +1566,8 @@ static void drives_down(void)
         cur = &vd[i];
         cur->ready = false;
         vfile_close();
+        if (cur->tmp_open && cur->mounted) tnfs_close(cur->tmp_handle);
+        cur->tmp_open = false;
         tnfs_unmount();
     }
     cur = NULL;
@@ -1246,11 +1654,20 @@ void net_poll(void)
         bool ok = vreq_drive < (uint32_t)nvd;
         if (ok) cur = &vd[vreq_drive];
         for (uint32_t i = 0; i < vreq_n && ok; i++)
-            ok = vfat_sector(vreq_rel + i, vreq_buf + i * 512);
+            ok = vreq_write ? vfat_write(vreq_rel + i, vreq_buf + i * 512)
+                            : vfat_sector(vreq_rel + i, vreq_buf + i * 512);
         cur = NULL;
         __dmb();
         vreq_state = ok ? 2 : 3;
     }
+    /* a second after the last write: bring the server in line */
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+    for (int i = 0; i < nvd && vreq_state != 1; i++)
+        if (vd[i].wr_pending && now - vd[i].last_wr_ms > 1000) {
+            cur = &vd[i];
+            vsync();
+            cur = NULL;
+        }
 }
 
 #endif

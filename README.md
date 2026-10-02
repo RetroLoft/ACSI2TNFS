@@ -89,6 +89,15 @@ README.TXT and ACSITNFS.PRG are read-only. A new firmware brings them up to date
 start-up and keeps every other file on C: (DESKTOP.INF, an AUTO folder, ...). A system
 file that was deleted comes back only with `R` on the USB console.
 
+## TNFS drives
+
+Every enabled TNFS slot (up to 3) is a virtual FAT16 partition generated from a scan of
+the server. They can be written: GEMDOS writes plain sectors (data first, the FAT and the
+directory entry at Fclose), so every written sector goes to a hidden file `/.A2T.TMP` on
+the server and is read back from there. A second after the last write the Pico walks the
+directory tree as GEMDOS has it and applies new, changed, renamed and deleted files and
+directories to the server. Files without write permission on the server show as read-only.
+
 ## Drive letters and TOS versions
 
 - TOS knows 16 drives (A:-P:), so TNFS drives get a letter from D: to P:. Higher letters

@@ -673,17 +673,6 @@ init:   movem.l d0-d7/a0-a6,-(sp)
         lea     firstdrv(pc),a0
         move.w  pdrv(pc),(a0)
 
-        ; boot from our first partition, like HDDRIVER does. GEMDOS already
-        ; picked its current drive from _bootdev before the floppy and hard
-        ; disk boot (xsetdrv(bootdev) in osinit; _bootdev is still A: after
-        ; a cold boot), and the AUTO folder and the desktop inherit that
-        ; drive, so set both.
-        move.w  firstdrv(pc),BOOTDEV.w
-        move.w  firstdrv(pc),-(sp)
-        move.w  #$0e,-(sp)              ; Dsetdrv
-        trap    #1
-        addq.l  #4,sp
-
         lea     old_bpb(pc),a0
         move.l  HDV_BPB.w,(a0)
         lea     my_bpb(pc),a1
@@ -696,6 +685,23 @@ init:   movem.l d0-d7/a0-a6,-(sp)
         move.l  HDV_MEDIACH.w,(a0)
         lea     my_mc(pc),a1
         move.l  a1,HDV_MEDIACH.w
+
+        ; boot from our first partition, like HDDRIVER does, but only when
+        ; it got C:. TOS runs the boot sector of every ACSI id from 0 up, so
+        ; a disk on a lower id (e.g. an ACSI2SD behind us) may already have
+        ; taken C: and set the boot drive: leave it to that one then.
+        ; GEMDOS already picked its current drive from _bootdev before the
+        ; floppy and hard disk boot (xsetdrv(bootdev) in osinit; _bootdev is
+        ; still A: after a cold boot), and the AUTO folder and the desktop
+        ; inherit that drive, so set both.
+        move.w  firstdrv(pc),d0
+        cmp.w   #2,d0                   ; C:?
+        bne.s   .noboot
+        move.w  firstdrv(pc),BOOTDEV.w
+        move.w  firstdrv(pc),-(sp)
+        move.w  #$0e,-(sp)              ; Dsetdrv
+        trap    #1
+        addq.l  #4,sp
         lea     old_resvalid(pc),a0
         move.l  RESVALID.w,(a0)
         lea     old_resvec(pc),a0
@@ -703,7 +709,7 @@ init:   movem.l d0-d7/a0-a6,-(sp)
         lea     my_reset(pc),a1
         move.l  a1,RESVECTOR.w
         move.l  #$31415926,RESVALID.w
-
+.noboot:
         move.w  d6,-(sp)                ; a wanted letter was taken
         moveq   #1,d0                   ; Wi-Fi first (only shown when waiting)
         bsr     set_clock

@@ -43,6 +43,24 @@ Ze doen ertoe op het moment dat de Pico **niet** onze firmware draait: bij het a
 
 **Op de huidige print:** een 10 kΩ van GP6 (/OE, U1 pin 19) naar 3,3 V is de belangrijkste. R7 en R9 leeg laten.
 
+## Nog testen: ACSI2SD achter de adapter (doorlusconnector)
+
+De dev-print heeft twee 20-polige connectoren die alle signalen doorverbinden, zoals bij Lotharek's ACSI2SD. Een tweede apparaat hangt dan gewoon parallel op de bus, met een eigen ACSI-ID. Nog niet getest: de ACSI2SD is hier niet aanwezig.
+
+Wat er al voor gedaan is:
+
+- **Bootdrive:** TOS voert de bootsector van elk ACSI-ID uit, van 0 naar 7 (`dmaboot` in `bios/startup.S` van TOS 1.x). Staat de ACSI2SD op een lager ID dan wij, dan heeft zijn driver C: al genomen. Onze driver zet de bootdrive (en de reset-hook) nu alleen nog als onze flash-disk C: krijgt; anders blijft de bootdrive van de andere driver staan. Zonder ACSI2SD getest: de ST start van onze C: zoals voorheen.
+
+Testplan als de ACSI2SD er is:
+
+1. **Pull-up op GP6 eerst** (zie hierboven): anders drijft U1 tijdens reset of BOOTSEL van de Pico de bus, ook voor de ACSI2SD.
+2. ACSI2SD op ID 0, wij op 6. Koude start: de ACSI2SD krijgt C: en de ST start daarvan; onze drives krijgen de volgende vrije letters ("[OK] Drives installed: ...").
+3. **Dubbel aankoppelen nagaan:**
+   - HDDRIVER scant alleen de ID's die in HDDRUTIL aanstaan; ID 6 daar uitzetten.
+   - AHDI scant alle ID's en koppelt onze partities dan ook aan, naast onze driver. Dezelfde schijf onder twee letters gaat bij schrijven mis. Oplossing (nog te bouwen): onze driver kijkt via `pun_ptr` of onze partities al aangekoppeld zijn en slaat ze dan over. Tot die tijd: verborgen modus (`H`) of HDDRIVER.
+4. Lezen en schrijven op beide apparaten door elkaar, en een Pico-flash terwijl de Atari van de ACSI2SD leest (controle van de pull-up).
+5. Kabellengte: de hele keten kort houden; bij haperingen eerst daar kijken.
+
 ## Eerst nagaan (voor optie 3: virtuele FAT)
 
 Twee dingen moeten op de echte hardware bevestigd worden voordat hierop gebouwd wordt:

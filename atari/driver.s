@@ -638,9 +638,9 @@ init:   movem.l d0-d7/a0-a6,-(sp)
 .let:   moveq   #0,d1
         move.b  4(a2,d7.w),d1           ; wanted letter or 0
         sub.b   #'A',d1
-        cmp.w   #3,d1                   ; D: .. Z: only
-        blt.s   .auto
-        cmp.w   #26,d1
+        cmp.w   #3,d1                   ; D: .. P: only: TOS knows 16 drives
+        blt.s   .auto                   ; (drvtbl[16], drive in 4 bits of the
+        cmp.w   #16,d1                  ; Fsnext position)
         bge.s   .auto
         btst    d1,d0
         beq.s   .got
@@ -649,7 +649,7 @@ init:   movem.l d0-d7/a0-a6,-(sp)
 .fr:    btst    d1,d0
         beq.s   .got
         addq.w  #1,d1
-        cmp.w   #26,d1
+        cmp.w   #16,d1
         blt.s   .fr
         bra     .fail
 .got:   bset    d1,d0

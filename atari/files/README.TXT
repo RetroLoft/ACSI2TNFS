@@ -45,3 +45,11 @@ USB console of the Pico (any baud rate, it is USB):
 
 With a Pico W / Pico 2 W: set up Wi-Fi, the TNFS drives and the
 clock with ACSITNFS.PRG.
+
+Drive letters and TOS versions
+  - TOS knows 16 drives: TNFS drives get a letter from D: to P:.
+  - TOS 1.x with several drives: put FOLDR100.PRG (AHDI) in
+    C:\AUTO, or GEMDOS runs out of folder memory.
+  - EmuTOS mounts the drives itself as C:, D:, E:, ...; the
+    chosen letters and the network clock do not apply there.
+  - TOS 1.0 does not see the adapter.

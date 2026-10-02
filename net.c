@@ -450,7 +450,7 @@ static void drives_from_settings(void)
         vdrive_t *d = &vd[nvd++];
         memset(d, 0, sizeof *d);
         d->slot = i;
-        d->letter = s->letter >= 'D' && s->letter <= 'Z' ? s->letter : 0;
+        d->letter = s->letter >= 'D' && s->letter <= 'P' ? s->letter : 0;   /* TOS: A: .. P: */
         snprintf(d->server, sizeof d->server, "%s", s->host);
         snprintf(d->path, sizeof d->path, "%s", s->mount_path[0] ? s->mount_path : "/");
         d->port = s->port ? s->port : 16384;

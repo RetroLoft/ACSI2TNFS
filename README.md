@@ -89,6 +89,15 @@ README.TXT and ACSITNFS.PRG are read-only. A new firmware brings them up to date
 start-up and keeps every other file on C: (DESKTOP.INF, an AUTO folder, ...). A system
 file that was deleted comes back only with `R` on the USB console.
 
+## Drive letters and TOS versions
+
+- TOS knows 16 drives (A:-P:), so TNFS drives get a letter from D: to P:. Higher letters
+  overran GEMDOS' drive table and broke Fsnext.
+- TOS 1.x with several drives needs FOLDR100.PRG (AHDI) in `C:\AUTO`.
+- EmuTOS mounts the partitions with its own ACSI driver (C:, D:, E:, ...); our driver,
+  letters and network clock do not apply there. It reads up to 255 sectors per command.
+- Tested: TOS 1.02, 1.04, EmuTOS. TOS 1.0 does not see the adapter.
+
 ## Hardware notes
 
 The `dev` board drives /DRQ through a BC547. It releases the line about 1 µs late, which

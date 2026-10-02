@@ -128,7 +128,7 @@ static uint32_t validate_drive(const set_drive_t *d, int index)
 {
     if (d->state > DRV_ENABLED) return ST_INVALID_DRIVE_STATE;
     if (d->state == DRV_EMPTY) return ST_OK;
-    if (d->letter < 'C' || d->letter > 'Z') return ST_INVALID_DRIVE_LETTER;
+    if (d->letter < 'C' || d->letter > 'P') return ST_INVALID_DRIVE_LETTER;  /* TOS: 16 drives */
     if (letter_used(&g_stage, d->letter, index)) return ST_DUPLICATE_DRIVE_LETTER;
     if (d->type != DRV_TYPE_TNFS) return ST_INVALID_TYPE;        /* no SD card support (yet) */
     if (d->transport > DRV_TCP) return ST_INVALID_TRANSPORT;
@@ -217,7 +217,7 @@ static void handle(void)
     case CMD_SET_CONFIG_DRIVE: {
         uint32_t l = get32(q);
         if (l >= 'a' && l <= 'z') l -= 32;
-        if (l < 'C' || l > 'Z') { o = put32(o, ST_INVALID_DRIVE_LETTER); break; }
+        if (l < 'C' || l > 'P') { o = put32(o, ST_INVALID_DRIVE_LETTER); break; }
         bool dup = false;
         for (int i = 0; i < SET_MAX_DRIVES; i++)
             if (g_stage.drv[i].state != DRV_EMPTY && g_stage.drv[i].letter == l) dup = true;

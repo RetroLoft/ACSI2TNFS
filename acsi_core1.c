@@ -305,8 +305,8 @@ static bool dma_out(const uint8_t *buf, uint32_t len)
 /* DMA: Atari -> device. The DIN state machine must already be running. */
 /* copy of everything received in this command, for the /ACK cross-check */
 static uint8_t  rxcopy[4608];
-#define WBUF_SECTORS 128
-static uint8_t  wbuf[WBUF_SECTORS * 512];   /* one complete write transfer */
+#define WBUF_SECTORS 256                    /* READ(6)/WRITE(6) maximum: EmuTOS asks 255 */
+static uint8_t  wbuf[WBUF_SECTORS * 512];   /* one complete transfer */
 static uint32_t rx_n;
 
 
@@ -642,7 +642,7 @@ static uint8_t exec_cmd(const uint8_t *cdb, uint8_t cdb_len, uint32_t *bytes)
             return send_reply(512);
         case 8:     /* drive letters for the driver, 512 bytes: "ATL", count,
                        then per root sector partition entry the wanted letter
-                       ('D'..'Z') or 0 = next free one (entry 0 = C: flash) */
+                       ('D'..'P') or 0 = next free one (entry 0 = C: flash) */
             memset(reply, 0, 512);
             memcpy(reply, "ATL", 3);
             reply[3] = 4;

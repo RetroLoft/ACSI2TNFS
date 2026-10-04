@@ -436,6 +436,7 @@ typedef struct {
     volatile int  tcp_last_err;
     uint16_t conn_id;
     uint8_t  seq;
+    uint8_t  gen;                   /* +1 at every new session (old handles dead) */
     unsigned vmaj, vmin;
     /* tree: nodes root .. node_end-1 of vn[], cluster owners valloc[va0 .. va0+van-1] */
     uint16_t root, node_end, node_limit;
@@ -448,7 +449,7 @@ typedef struct {
     uint8_t  vf_handle;
     uint32_t vf_pos;
     /* writes: every written sector lives in a hidden file on the server */
-    bool     tmp_open, wr_pending;
+    bool     tmp_open, tmp_used, wr_pending;
     uint8_t  tmp_handle;
     uint32_t last_wr_ms;
     char     status[96];
@@ -604,7 +605,7 @@ static bool udp_open(void)
 /* send one request to the current drive's server and wait for the matching
    reply; returns reply length (>= 5) or -1. UDP retries with the same
    sequence number, as TNFS expects. */
-static int tnfs_req(uint8_t cmd, const void *data, int dlen)
+static int tnfs_req1(uint8_t cmd, const void *data, int dlen)
 {
     static uint8_t tx[600];                 /* core0 only, not reentrant */
     vdrive_t *d = cur;
@@ -643,6 +644,37 @@ static int tnfs_req(uint8_t cmd, const void *data, int dlen)
         }
     }
     return -1;
+}
+
+static bool tnfs_mount(void);
+static void tcp_shut(vdrive_t *d);
+
+/* tnfs_req1, and when the server no longer knows our session (it drops idle
+   sessions, tnfsd after 10 minutes, or it was restarted: status 0xFF) mount
+   again. Requests with a path are repeated; requests with a file or
+   directory handle fail, their callers open the file again (d->gen). */
+static int tnfs_req(uint8_t cmd, const void *data, int dlen)
+{
+    static bool remounting;
+    vdrive_t *d = cur;
+    int n = tnfs_req1(cmd, data, dlen);
+    if (n < 5 || rx[4] != 0xff || cmd <= 0x01 || remounting) return n;
+    printf("net: TNFS %s: session gone, mounting again\n", d->server);
+    remounting = true;
+    if (d->use_tcp) tcp_shut(d);
+    d->mounted = false;
+    bool ok = tnfs_mount();
+    remounting = false;
+    if (!ok) { printf("net: TNFS %s: %s\n", d->server, d->status); return -1; }
+    d->gen++;
+    d->vf_node = -1;                        /* handles of the old session */
+    d->tmp_open = false;
+    switch (cmd) {
+    case 0x10: case 0x13: case 0x14: case 0x24: case 0x26: case 0x28: case 0x29:
+        return tnfs_req1(cmd, data, dlen);  /* OPENDIR MKDIR RMDIR STAT UNLINK RENAME OPEN */
+    default:
+        return -1;
+    }
 }
 
 /* ---------------- server address: IP or host name (DNS) ---------------- */
@@ -1051,7 +1083,7 @@ static void vfat_scan(void)
     int k = (int)(d - vd);
     memset(wbits[k], 0, sizeof wbits[k]);
     memset(dbits[k], 0, sizeof dbits[k]);
-    d->tmp_open = d->wr_pending = false;
+    d->tmp_open = d->tmp_used = d->wr_pending = false;
     __dmb();
     d->ready = true;
 }
@@ -1133,7 +1165,7 @@ static void vfile_close(void)
     d->vf_node = -1;
 }
 
-static bool vfile_read(uint16_t node, uint32_t off, uint8_t *dst, uint32_t len)
+static bool vfile_read1(uint16_t node, uint32_t off, uint8_t *dst, uint32_t len)
 {
     vdrive_t *d = cur;
     if (d->vf_node != node) {
@@ -1159,6 +1191,7 @@ static bool vfile_read(uint16_t node, uint32_t off, uint8_t *dst, uint32_t len)
         uint16_t want = len > 512 ? 512 : (uint16_t)len;
         uint8_t req[3] = { d->vf_handle, (uint8_t)(want & 0xff), (uint8_t)(want >> 8) };
         int n = tnfs_req(0x21, req, 3);                    /* READ     */
+        if (n < 0) return false;                           /* session gone */
         if (n < 7 || rx[4] != 0) break;                    /* EOF/error: zeros */
         uint16_t got = le16(rx + 5);
         if (got > n - 7) got = (uint16_t)(n - 7);
@@ -1168,6 +1201,13 @@ static bool vfile_read(uint16_t node, uint32_t off, uint8_t *dst, uint32_t len)
         if (!got) break;
     }
     return true;
+}
+
+static bool vfile_read(uint16_t node, uint32_t off, uint8_t *dst, uint32_t len)
+{
+    uint8_t gen = cur->gen;
+    if (vfile_read1(node, off, dst, len)) return true;
+    return cur->gen != gen && vfile_read1(node, off, dst, len);   /* new session */
 }
 
 /* ---------------- writing ----------------
@@ -1236,15 +1276,16 @@ static bool tnfs_rename(const char *from, const char *to)
 }
 
 /* one sector of TMP_NAME */
-static bool tmp_io(uint32_t rel, uint8_t *buf, bool write)
+static bool tmp_io1(uint32_t rel, uint8_t *buf, bool write)
 {
     vdrive_t *d = cur;
     if (!d->tmp_open) {
-        if (!tnfs_open(TMP_NAME, TO_RDWR | TO_CREAT | TO_TRUNC, &d->tmp_handle)) {
+        uint16_t fl = TO_RDWR | TO_CREAT | (d->tmp_used ? 0 : TO_TRUNC);
+        if (!tnfs_open(TMP_NAME, fl, &d->tmp_handle)) {
             printf("net: cannot create %s: %s (0x%02x)\n", TMP_NAME, tnfs_err(rx[4]), rx[4]);
             return false;
         }
-        d->tmp_open = true;
+        d->tmp_open = d->tmp_used = true;
     }
     if (!tnfs_seek(d->tmp_handle, rel * 512u)) return false;
     if (write) return tnfs_write(d->tmp_handle, buf, 512);
@@ -1255,6 +1296,13 @@ static bool tmp_io(uint32_t rel, uint8_t *buf, bool write)
     if (got > 512 || got > n - 7) return false;
     memcpy(buf, rx + 7, got);
     return true;
+}
+
+static bool tmp_io(uint32_t rel, uint8_t *buf, bool write)
+{
+    uint8_t gen = cur->gen;
+    if (tmp_io1(rel, buf, write)) return true;
+    return cur->gen != gen && tmp_io1(rel, buf, write);         /* new session */
 }
 
 static bool vfat_write(uint32_t rel, const uint8_t *buf)
@@ -1534,6 +1582,7 @@ static void vsync(void)
     int nq = 0, acts = 0;
 
     int k0 = (int)(d - vd);
+    uint8_t gen0 = d->gen;
     memcpy(sbits, dbits[k0], sizeof sbits);
     memset(dbits[k0], 0, sizeof dbits[0]);
     d->wr_pending = false;                  /* writes from now on: next sync */
@@ -1584,6 +1633,11 @@ static void vsync(void)
         vreq_service();
     }
     vfile_close();
+    if (d->gen != gen0) {                   /* new session halfway: files may be */
+        for (uint32_t b = 0; b < sizeof sbits; b++) dbits[k0][b] |= sbits[b];   /* incomplete */
+        d->wr_pending = true;
+        d->last_wr_ms = to_ms_since_boot(get_absolute_time());
+    }
     printf("sync: TNFS %d, %d change(s), %lu ms\n", (int)(d - vd) + 1, acts,
            (unsigned long)(to_ms_since_boot(get_absolute_time()) - t0));
 }

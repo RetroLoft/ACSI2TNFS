@@ -94,6 +94,21 @@ Frame-brug op de Pico (filter op `netif->input`, RX-ring 8, TX-ring 4, TX via ee
 
 Opgevallen: STinG roept de receive-routine vaker aan dan verwacht (~80–150×/s in plaats van 20×/s bij THREADING 10). Elke lege poll kost ~0,75 ms. Uitzoeken in fase 4.
 
+## ACSI_NET fase 4: testverslag (4 oktober 2026) - eerste PING
+
+`ACSI_NET.STX` 00.04 (5 KB): ARP-cache, ARP-antwoorden, ARP-vragen voor de next hop (hooguit 1×/s per adres, wachtrij tot het antwoord), IP-datagrammen ↔ Ethernet-frames, maximaal 4 frames in en 4 datagrammen uit per STinG-aanroep.
+
+| Test | Resultaat |
+|---|---|
+| Laptop pingt de Atari (192.168.178.50) | 10/10 antwoorden, 66–102 ms (eerste 446 ms incl. ARP); ARP-tabel laptop: .50 en .103 beide `2c:cf:67:c8:e6:ba` |
+| PING.PRG op de Atari naar de router (192.168.178.1) | 50 verzonden, 50 ontvangen, 0 verloren |
+| Pico-teller | 63 frames naar de Atari, 63 verstuurd; 0 gedropt, 0 BUSY, 0 geweigerd, 0 zendfouten |
+| Diskverkeer in de tussentijd | 119 reads, 0 fouten |
+
+Let op: `THREADING` in STinGs `DEFAULT.CFG` is in **milliseconden** (STinG deelt door 5). 50 = elke 50 ms pollen (standaard); 10 gaf ~100 polls/s (de "te vaak pollen" uit fase 3). Een lege poll kost ~0,75 ms, bij 50 ms dus ~1,5 % CPU.
+
+Bekende beperking: de Atari kan het eigen IP van de Pico (192.168.178.103) niet pingen; de brug laat zulke frames bewust vallen (zie ontwerp, risico 6). PING.PRG gebruikt standaard 127.0.0.1 (loopback in STinG zelf).
+
 ## Nog testen: ACSI2SD achter de adapter (doorlusconnector)
 
 De dev-print heeft twee 20-polige connectoren die alle signalen doorverbinden, zoals bij Lotharek's ACSI2SD. Een tweede apparaat hangt dan gewoon parallel op de bus, met een eigen ACSI-ID. Nog niet getest: de ACSI2SD is hier niet aanwezig.

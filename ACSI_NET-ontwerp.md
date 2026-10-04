@@ -79,7 +79,7 @@ lwIP draait als `pico_cyw43_arch_lwip_threadsafe_background`. De cyw43-driver en
 ### B.1 STinG 1.26 (th-otto/STinG)
 
 - **Portdrivers werken op IP-niveau.** STinG zet uitgaande `IP_DGRAM`'s in `port->send` en roept `driver->send(port)` aan. De driver zet ontvangen datagrammen in `port->receive` (via `KRmalloc`). Een Ethernet-driver moet zelf **ARP** en de Ethernet-header doen. `IP_DGRAM` levert `hdr`, `options` en `pkt_data` los aan, plus `ip_gateway` (next hop).
-- **Polling vanuit een interrupt.** `my_200_Hz` (`sting/thread.s`) telt `fraction` ticks af (standaard 10 → **elke 50 ms**; DEFAULT.CFG `THREADING`, 2..199). Daarna draait `poll_ports` **in supervisor-modus, op het interruptniveau van de onderbroken code**, en alleen als die onder IPL 4 zat. `poll_ports` roept per poort `driver->receive` en daarna het verzenden aan. Gevolgen:
+- **Polling vanuit een interrupt.** `my_200_Hz` (`sting/thread.s`) telt `fraction` ticks af (standaard 10 → **elke 50 ms**; DEFAULT.CFG `THREADING` in milliseconden, STinG deelt door 5). Daarna draait `poll_ports` **in supervisor-modus, op het interruptniveau van de onderbroken code**, en alleen als die onder IPL 4 zat. `poll_ports` roept per poort `driver->receive` en daarna het verzenden aan. Gevolgen:
   - De STX kan midden in een diskcommando van GEMDOS terechtkomen. Hij **moet** `flock` controleren.
   - Tijdens de poll loopt `_hz_200` door (Timer C, IPL 6), dus timeouts op `_hz_200` werken.
   - Elke milliseconde in de poll is CPU-tijd die de voorgrond mist. Werk per poll begrenzen.

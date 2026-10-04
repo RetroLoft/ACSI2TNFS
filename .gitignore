@@ -14,3 +14,5 @@ _autosave-*
 !.vscode/*
 atari/version.inc
 atari/tools/NETTEST.TTP
+atari/sting/*.o
+atari/sting/ACSI_NET.STX

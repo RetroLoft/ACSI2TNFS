@@ -10,6 +10,7 @@
  *   NETTEST U          send an unknown network sub (0x2e): must be refused
  *   NETTEST A [ip [target [s]]]  bridge on, ARP request to the target (router)
  *   NETTEST L [ip [s]]           bridge on, listen, answer ARP for our IP
+ *   NETTEST R [s]                file reads from C: and F: only (no network)
  *
  * ACSI is driven directly, as in atari/acsi.inc, in supervisor mode and
  * with flock taken with TAS (as a STinG driver will have to).
@@ -19,6 +20,8 @@
 #include <string.h>
 #include <stdlib.h>
 #include <osbind.h>
+#include <signal.h>
+#include <unistd.h>
 
 /* everything on screen also goes to NETTEST.LOG in the current folder
    (on a TNFS drive it can be read on the server right away) */
@@ -114,6 +117,15 @@ out:
     *DMACTRL = 0x080;                           /* back to the FDC, as TOS leaves it */
     *FLOCK = 0;
     return a_result = r;
+}
+
+/* a library error ends with abort(): show it before the window closes */
+static void fatal_signal(int sig)
+{
+    (void)sig;
+    Cconws(NL "NETTEST: fatal error, stopped. Druk op een toets." NL);
+    Cconin();
+    _exit(3);
 }
 
 static long get_hz(void) { return (long)HZ200; }
@@ -320,9 +332,21 @@ static void ftest_init(FTEST *f, const char *name)
     if (f->nchunk > 64) f->nchunk = 64;
     for (k = 0; k < f->nchunk; k++) {
         long l = chunk_len(f, size, k);
-        Fseek(k * CHUNK, f->fd, 0);
-        if (Fread(f->fd, l, chunkbuf) != l) { f->nchunk = k; break; }
-        f->sum[k] = csum(chunkbuf, l) ^ (unsigned long)l << 16;
+        unsigned long prev = 0;
+        int tries;
+        /* reference = two reads in a row that agree (one bad read must not
+           spoil every later comparison) */
+        for (tries = 0; tries < 6; tries++) {
+            unsigned long s;
+            Fseek(k * CHUNK, f->fd, 0);
+            if (Fread(f->fd, l, chunkbuf) != l) { tries = 99; break; }
+            s = csum(chunkbuf, l) ^ (unsigned long)l << 16;
+            if (tries && s == prev) break;
+            prev = s;
+        }
+        if (tries >= 6) { printf("  %s: chunk %ld never read the same twice" NL, name, k); }
+        if (tries == 99) { f->nchunk = k; break; }
+        f->sum[k] = prev;
     }
     f->lastlen = size;
     printf("  %s: %ld bytes, %ld chunks of 16 KB" NL, name, size, f->nchunk);
@@ -475,6 +499,34 @@ static int bridge_test(char mode, unsigned long target, long seconds)
     return (mode != 'A' || got_reply) && !rx_err && !files[0].errors && !files[1].errors;
 }
 
+/* mode 'R': only file reads, no network: the baseline for disk/TNFS reads */
+static int read_test(long seconds)
+{
+    long t0, now, kb = 0;
+    int which = 0;
+
+    chunkbuf = (unsigned char *)Malloc(CHUNK);
+    if (!chunkbuf) { printf("no memory" NL); return 0; }
+    printf("Reference read of the test files:" NL);
+    ftest_init(&files[0], "C:\\ACSITNFS.PRG");
+    ftest_init(&files[1], "F:\\GAMES\\BIG.BI4");
+    printf("Reading 16 KB chunks, alternately, %ld s:" NL, seconds);
+    t0 = Supexec(get_hz);
+    do {
+        ftest_step(&files[which]);
+        which ^= 1;
+        kb += 16;
+        now = Supexec(get_hz);
+    } while (now - t0 < seconds * 200);
+    printf(NL "Result (%ld KB read):" NL, kb);
+    printf("  %s: %ld reads, %ld errors" NL, files[0].name, files[0].reads, files[0].errors);
+    printf("  %s: %ld reads, %ld errors" NL, files[1].name, files[1].reads, files[1].errors);
+    if (files[0].fd >= 0) Fclose(files[0].fd);
+    if (files[1].fd >= 0) Fclose(files[1].fd);
+    Mfree(chunkbuf);
+    return !files[0].errors && !files[1].errors;
+}
+
 static void take_info(void)                     /* after net_info(): our addresses */
 {
     memcpy(mymac, dmabuf + 10, 6);
@@ -488,7 +540,12 @@ int main(int argc, char **argv)
     char op = argc > 1 ? argv[1][0] & ~0x20 : 0;
     int ok = 1, i;
 
+    signal(SIGABRT, fatal_signal);
+    signal(SIGSEGV, fatal_signal);
+    signal(SIGBUS, fatal_signal);
+    signal(SIGILL, fatal_signal);
     logf = fopen("NETTEST.LOG", "ab");
+    if (logf) setvbuf(logf, NULL, _IOLBF, 256);    /* line by line: a crash keeps the log */
     fputs("\033E", stdout);                     /* clear screen, not in the log */
     if (logf) fprintf(logf, "----" NL);
     printf("NETTEST - ACSI_NET test, arguments:");
@@ -526,6 +583,9 @@ int main(int argc, char **argv)
                                  argc > 4 ? atol(argv[4]) : 10);
             else
                 ok = bridge_test('L', my_ip, argc > 3 ? atol(argv[3]) : 60);
+            break;
+        case 'R':       /* NETTEST R [seconds]: disk/TNFS reads only */
+            ok = read_test(argc > 2 ? atol(argv[2]) : 120);
             break;
         case 'U': {
             long r = cmd(0x2e, 0, dmabuf, 1, 0);

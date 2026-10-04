@@ -76,9 +76,10 @@ fall:
     set pins, 0             ; release /DRQ
 public fetch:
     pull block              ; fetch the next byte while /ACK is still low
-    wait 1 gpio 18 [3]      ; hold the byte ~50 ns after /ACK rises, as the ST
-.wrap                       ; does on writes: switching right at the edge gave
-                            ; the ST now and then the next byte (1 in 300 KB)
+    wait 1 gpio 18 [15]     ; hold the byte ~130 ns after /ACK rises. The DMA
+.wrap                       ; chip latches late now and then: with ~50 ns hold
+                            ; the ST still got the next byte instead (seen with
+                            ; NETTEST R and in the /ACK cross-check)
 
 ; ---------------------------------------------------------------------------
 ; SM3: DMA data from Atari to device (Atari "write").

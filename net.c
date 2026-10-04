@@ -1320,6 +1320,28 @@ static int32_t fsec_rel = -1;
 
 static bool valid_cl(uint32_t c) { return c >= 2 && c < V_NCL + 2; }
 
+/* the request core1 is waiting for (an Atari read or write of a TNFS drive).
+   Called from net_poll and, between its own steps, by a sync: one large file
+   can take seconds to sync, longer than core1 may wait (9 s). */
+static void vreq_service(void)
+{
+    if (vreq_state != 1) return;
+    vdrive_t *save = cur;
+    bool ok = vreq_drive < (uint32_t)nvd;
+    if (ok) cur = &vd[vreq_drive];
+    for (uint32_t i = 0; i < vreq_n && ok; i++)
+        ok = vreq_write ? vfat_write(vreq_rel + i, vreq_buf + i * 512)
+                        : vfat_sector(vreq_rel + i, vreq_buf + i * 512);
+    if (vreq_write) fsec_rel = -1;          /* the FAT may have changed */
+    cur = save;
+    __dmb();
+    vreq_state = ok ? 2 : 3;
+}
+
+/* sectors written since the last sync, as taken over by the running sync;
+   writes during the sync go to dbits again for the next one */
+static uint8_t sbits[(VFAT_SECTORS + 7) / 8];
+
 /* FAT entry of cluster c as GEMDOS has it now */
 static uint32_t vfat_get(uint32_t c)
 {
@@ -1335,7 +1357,7 @@ static uint32_t vfat_get(uint32_t c)
    its sectors since the last sync */
 static uint32_t chain_info(uint32_t c, bool *dirty)
 {
-    const uint8_t *db = dbits[cur - vd];
+    const uint8_t *db = sbits;
     uint32_t sig = 0;
     *dirty = false;
     for (uint32_t i = 0; valid_cl(c) && i < V_NCL; i++) {
@@ -1434,6 +1456,7 @@ static bool vbuild(uint16_t n, uint32_t c, uint32_t size)
             uint16_t len = left > 512 ? 512 : (uint16_t)left;
             ok = vfat_sector(V_DATREC + (cc - 2) * V_SPC + s, sec) && tnfs_write(h, sec, len);
             left -= len;
+            vreq_service();
         }
     tnfs_close(h);
     if (left) ok = false;                                   /* FAT not complete (yet) */
@@ -1510,6 +1533,10 @@ static void vsync(void)
     uint32_t t0 = to_ms_since_boot(get_absolute_time());
     int nq = 0, acts = 0;
 
+    int k0 = (int)(d - vd);
+    memcpy(sbits, dbits[k0], sizeof sbits);
+    memset(dbits[k0], 0, sizeof dbits[0]);
+    d->wr_pending = false;                  /* writes from now on: next sync */
     fsec_rel = -1;
     for (uint16_t i = d->root; i < d->node_end; i++) vn[i].flags &= (uint8_t)~VF_SEEN;
     vn[d->root].flags |= VF_SEEN;
@@ -1527,6 +1554,8 @@ static void vsync(void)
             for (uint32_t s = 0; !end && s < nsec; s++) {
                 if (!vfat_sector(rel0 + s, sec)) {
                     printf("sync: read error, try again later\n");
+                    for (uint32_t b = 0; b < sizeof sbits; b++) dbits[k0][b] |= sbits[b];
+                    d->wr_pending = true;
                     d->last_wr_ms = to_ms_since_boot(get_absolute_time());
                     return;
                 }
@@ -1536,6 +1565,7 @@ static void vsync(void)
                     else if (e[0] != 0xe5 && e[0] != '.' && !(e[11] & 0x08))   /* not deleted, ., .., label */
                         vsync_entry(dir, e, queue, &nq, &acts);
                 }
+                vreq_service();
             }
             if (root) break;
             c = vfat_get(c);
@@ -1551,10 +1581,9 @@ static void vsync(void)
         printf("sync: %s %s %s\n", v->isdir ? "rmdir" : "delete", path, ok ? "ok" : tnfs_err(rx[4]));
         v->flags |= VF_DEL;
         acts++;
+        vreq_service();
     }
     vfile_close();
-    memset(dbits[d - vd], 0, sizeof dbits[0]);
-    d->wr_pending = false;
     printf("sync: TNFS %d, %d change(s), %lu ms\n", (int)(d - vd) + 1, acts,
            (unsigned long)(to_ms_since_boot(get_absolute_time()) - t0));
 }
@@ -1651,16 +1680,7 @@ void net_poll(void)
         test_req = false;
         tnfs_connect_and_scan();
     }
-    if (vreq_state == 1) {
-        bool ok = vreq_drive < (uint32_t)nvd;
-        if (ok) cur = &vd[vreq_drive];
-        for (uint32_t i = 0; i < vreq_n && ok; i++)
-            ok = vreq_write ? vfat_write(vreq_rel + i, vreq_buf + i * 512)
-                            : vfat_sector(vreq_rel + i, vreq_buf + i * 512);
-        cur = NULL;
-        __dmb();
-        vreq_state = ok ? 2 : 3;
-    }
+    vreq_service();
     /* a second after the last write: bring the server in line */
     uint32_t now = to_ms_since_boot(get_absolute_time());
     for (int i = 0; i < nvd && vreq_state != 1; i++)

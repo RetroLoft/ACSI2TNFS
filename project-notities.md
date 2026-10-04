@@ -43,6 +43,25 @@ Ze doen ertoe op het moment dat de Pico **niet** onze firmware draait: bij het a
 
 **Op de huidige print:** een 10 kΩ van GP6 (/OE, U1 pin 19) naar 3,3 V is de belangrijkste. R7 en R9 leeg laten.
 
+## ACSI_NET fase 1: testverslag (4 oktober 2026)
+
+Ontwerp: `ACSI_NET-ontwerp.md`. Getest op de ST (TOS 1.04) met `NETTEST.TTP` van een TNFS-drive (log in `NETTEST.LOG`) en de Pico-log, adapter op ACSI-ID 6.
+
+| Test | Resultaat |
+|---|---|
+| Oude firmware (zonder netwerkfunctie) | NET_INFO → status 2 → "Network function not supported" |
+| NET_INFO | protocol 1, MAC, IP/masker/gateway van de Pico, Wi-Fi-status kloppen |
+| **Korte DMA-read**: Atari programmeert 3 sectoren, Pico stuurt er 1, 2 of 3 | 2300 rondes per grootte (6900 commando's): 0 fouten, DMA-status steeds ok, niets geschreven voorbij de data |
+| Sector 0 lezen tussen elke ronde (diskpad) | 2300 keer, 0 fouten |
+| NET_CTRL aan (192.168.178.50/24) | opgeslagen, zichtbaar in NET_INFO en console `w` |
+| NET_CTRL met het IP van de Pico | geweigerd (status 2, sense $24, resultaat 4); vorige instelling blijft |
+| Onbekende sub $2E | geweigerd (status 2, sense $20) |
+| NET_CTRL uit | opgeslagen |
+
+Duur per commando (Atari, inclusief Supexec; Pico-kant tussen haakjes): 1 sector ~0,74 ms (0,50 ms), 2 sectoren ~1,13 ms (0,83 ms), 3 sectoren ~1,50 ms (1,18 ms). De Pico telde steeds 2 /ACK's meer dan bytes (n×512+2), hetzelfde als bij disk-reads (trage /DRQ, BC547).
+
+**Conclusie:** de korte DMA-read is betrouwbaar. NET_RX kan dus zoals ontworpen: de Atari vraagt altijd 3 sectoren, en een lege poll kost 1 sector (~0,75 ms). Een aparte NET_POLL is niet nodig.
+
 ## Nog testen: ACSI2SD achter de adapter (doorlusconnector)
 
 De dev-print heeft twee 20-polige connectoren die alle signalen doorverbinden, zoals bij Lotharek's ACSI2SD. Een tweede apparaat hangt dan gewoon parallel op de bus, met een eigen ACSI-ID. Nog niet getest: de ACSI2SD is hier niet aanwezig.

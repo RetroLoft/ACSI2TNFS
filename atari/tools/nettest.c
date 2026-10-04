@@ -13,9 +13,30 @@
  * with flock taken with TAS (as a STinG driver will have to).
  */
 #include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
 #include <stdlib.h>
 #include <osbind.h>
+
+/* everything on screen also goes to NETTEST.LOG in the current folder
+   (on a TNFS drive it can be read on the server right away) */
+static FILE *logf;
+
+static int out(const char *fmt, ...)
+{
+    va_list ap;
+    int n;
+    va_start(ap, fmt);
+    n = vprintf(fmt, ap);
+    va_end(ap);
+    if (logf) {
+        va_start(ap, fmt);
+        vfprintf(logf, fmt, ap);
+        va_end(ap);
+    }
+    return n;
+}
+#define printf out
 
 #define DMADATA   ((volatile unsigned short *)0xffff8604L)
 #define DMACTRL   ((volatile unsigned short *)0xffff8606L)
@@ -252,9 +273,14 @@ static int short_read_test(int rounds)
 int main(int argc, char **argv)
 {
     char op = argc > 1 ? argv[1][0] & ~0x20 : 0;
-    int ok = 1;
+    int ok = 1, i;
 
-    printf("\033ENETTEST - ACSI_NET phase 1" NL NL);
+    logf = fopen("NETTEST.LOG", "ab");
+    fputs("\033E", stdout);                     /* clear screen, not in the log */
+    if (logf) fprintf(logf, "----" NL);
+    printf("NETTEST - ACSI_NET phase 1, arguments:");
+    for (i = 1; i < argc; i++) printf(" %s", argv[i]);
+    printf(NL NL);
     if (find_adapter() < 0) {
         printf("No ACSI2TNFS found on ACSI id 0-7" NL);
         ok = 0;
@@ -289,6 +315,7 @@ int main(int argc, char **argv)
         }
     }
     printf(NL "%s. Press a key." NL, ok ? "Done" : "Failed");
+    if (logf) fclose(logf);
     Cconin();
     return ok ? 0 : 1;
 }

@@ -80,6 +80,20 @@ Frame-brug op de Pico (filter op `netif->input`, RX-ring 8, TX-ring 4, TX via ee
 
 **Gevonden, nog open (TNFS-schrijven, niet het netwerk):** bij het kopiëren van GAMES naar `F:\WRITE` duurde de sync van een bestand van 405 KB 9,65 s. Een read van de TNFS-drive die in die tijd binnenkwam, wachtte op core0 en gaf na 9 s een leesfout → het kopiëren brak af (`DATA_002.DEL` e.v. ontbreken). Gekopieerde bestanden zijn wel correct. Oplossing: de sync laat tussendoor wachtende reads voor gaan, of wordt in stukjes gedaan.
 
+## ACSI_NET fase 3: testverslag (4 oktober 2026)
+
+`ACSI_NET.STX` (skelet, 2,9 KB) onder STinG 1.26 met XControl 1.31; STinG-map op de TNFS-drive (`F:\STING`), `STING.PRG`/`STING.INF` in `C:\AUTO`.
+
+| Test | Resultaat |
+|---|---|
+| Laden | adapter gevonden (sub 8), NET_INFO ok, poort ACSI2TNFS geïnstalleerd |
+| Poort actief in STNGPORT.CPX (192.168.178.50/24) | NET_CTRL → Pico: bridge on, filter, performance-mode |
+| Pollen vanuit de STinG-thread | duizenden NET_RX-polls, 0 fouten |
+| Kopiëren met actieve poort: `C:\AUTO` en `F:\GAMES` naar `F:\WRITE` | alles identiek (16/16 + AUTO); 361 reads, 127 writes, 0 fouten; syncs van 42 s en 28 s ondertussen |
+| Crystal Castles starten | drie bommen met STinG + XControl geladen, ook met de poort uit én zonder `ACSI_NET.STX`; zonder STinG/XControl start het. Oorzaak dus STinG/XControl (geheugen of vectoren), niet ACSI_NET |
+
+Opgevallen: STinG roept de receive-routine vaker aan dan verwacht (~80–150×/s in plaats van 20×/s bij THREADING 10). Elke lege poll kost ~0,75 ms. Uitzoeken in fase 4.
+
 ## Nog testen: ACSI2SD achter de adapter (doorlusconnector)
 
 De dev-print heeft twee 20-polige connectoren die alle signalen doorverbinden, zoals bij Lotharek's ACSI2SD. Een tweede apparaat hangt dan gewoon parallel op de bus, met een eigen ACSI-ID. Nog niet getest: de ACSI2SD is hier niet aanwezig.

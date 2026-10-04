@@ -62,6 +62,24 @@ Duur per commando (Atari, inclusief Supexec; Pico-kant tussen haakjes): 1 sector
 
 **Conclusie:** de korte DMA-read is betrouwbaar. NET_RX kan dus zoals ontworpen: de Atari vraagt altijd 3 sectoren, en een lege poll kost 1 sector (~0,75 ms). Een aparte NET_POLL is niet nodig.
 
+## ACSI_NET fase 2: testverslag (4 oktober 2026)
+
+Frame-brug op de Pico (filter op `netif->input`, RX-ring 8, TX-ring 4, TX via een worker in de cyw43-context). Getest met `NETTEST A/L/R/D`, tussendoor steeds 16 KB-reads van `C:\ACSITNFS.PRG` en `F:\GAMES\BIG.BI4` (TNFS), vergeleken met een referentie.
+
+| Test | Resultaat |
+|---|---|
+| `NETTEST A`: ARP-request vanaf de Atari naar de router | antwoord van 192.168.178.1 na 255 ms; 31 NET_RX-polls, 0 fouten |
+| `NETTEST L`: ARP van de laptop voor 192.168.178.50 | 9 requests ontvangen en beantwoord; daarna 14 ICMP-echo's van de laptop ontvangen |
+| NET_TX | 18 frames verzonden, 0 BUSY, 0 geweigerd, 0 zendfouten |
+| NET_RX | 411 polls, 0 fouten; 0,47–1,1 ms per poll |
+| Bestand-reads tijdens A en L | C: 97, F: 96, 0 fouten |
+| Brug aan, niemand pollt (kopieertest) | ring vol → 147 frames gecontroleerd gedropt, geen invloed op disk/TNFS |
+| `NETTEST D` | brug uit, filter weg, performance-mode uit |
+
+**Gevonden en opgelost tijdens fase 2 (bestaand leespad, niet het netwerk):** de Pico zette na /ACK te snel de volgende byte op de bus; de DMA-chip las dan af en toe die volgende byte. NETTEST zelf laadde zo beschadigd (`LINK A6,#$ffec` → `#$ecec`, bommen). Hold na /ACK van ~50 ns naar ~130 ns (`acsi_bus.pio`). Daarna `NETTEST R`: 5984 KB, 0 fouten; in totaal 1538 reads zonder één /ACK-afwijking; snelheid gelijk (16 KB van C: in 11,4 ms).
+
+**Gevonden, nog open (TNFS-schrijven, niet het netwerk):** bij het kopiëren van GAMES naar `F:\WRITE` duurde de sync van een bestand van 405 KB 9,65 s. Een read van de TNFS-drive die in die tijd binnenkwam, wachtte op core0 en gaf na 9 s een leesfout → het kopiëren brak af (`DATA_002.DEL` e.v. ontbreken). Gekopieerde bestanden zijn wel correct. Oplossing: de sync laat tussendoor wachtende reads voor gaan, of wordt in stukjes gedaan.
+
 ## Nog testen: ACSI2SD achter de adapter (doorlusconnector)
 
 De dev-print heeft twee 20-polige connectoren die alle signalen doorverbinden, zoals bij Lotharek's ACSI2SD. Een tweede apparaat hangt dan gewoon parallel op de bus, met een eigen ACSI-ID. Nog niet getest: de ACSI2SD is hier niet aanwezig.

@@ -1,0 +1,158 @@
+# Internet on the Atari with STinG
+
+The adapter's Pico is on your Wi-Fi network. With the STinG TCP/IP stack and the driver
+`ACSI_NET.STX` the Atari gets its own IP address there: it can ping, use FTP, fetch web
+pages and be reached from other computers.
+
+```text
+program (PING, gapFTP, URLVIEW, ...)
+  -> STinG (IP, TCP, UDP, DNS)
+  -> ACSI_NET.STX (Ethernet frames, ARP)
+  -> ACSI -> Pico -> Wi-Fi -> your router -> internet
+```
+
+The disk functions keep working at the same time: C: and the network drives.
+
+## 1. What you need
+
+| | Where |
+|---|---|
+| STinG 1.26 | [sting126.lzh](https://chebucto.ns.ca/Services/PDA/sting126.lzh) from the [Chebucto Atari page](https://chebucto.ns.ca/Services/PDA/AtariSTComm.shtml) |
+| XControl 1.31 | [xctl131.zip](https://chebucto.ns.ca/Services/PDA/xctl131.zip) (same page) |
+| `ACSI_NET.STX` | on drive C: of the adapter (read-only system file) |
+| Firmware with the network function | 0.4.0 or later from the `acsi-net` branch |
+
+`.lzh` archives can be unpacked on the Atari with LHarc, or on a PC with 7-Zip.
+
+Older firmware: `ACSI_NET.STX` says *firmware without network function, not installed*
+at start-up. After a firmware update the new files may be missing on C:: press `R` on
+the USB console (see [ADAPTER.md](ADAPTER.md)).
+
+## 2. Choose an IP address for the Atari
+
+The Atari uses the **same MAC address as the Pico** but its **own IP address**. STinG has
+no DHCP, so you pick one yourself:
+
+- It must be **free**: no other device may use it.
+- Take one **outside the range your router hands out** (DHCP). A FRITZ!Box hands out
+  `.20`–`.200` by default, so for `192.168.178.x` pick e.g. `192.168.178.210`.
+- Not the Pico's own address (the USB console shows it with `n`).
+
+The examples below use network `192.168.178.0/24`, router `192.168.178.1` and Atari
+`192.168.178.210`. Use your own values.
+
+## 3. Install STinG
+
+From the STinG archive:
+
+| File | Goes to |
+|---|---|
+| `AUTO\STING.PRG`, `AUTO\STING.INF` | `C:\AUTO` |
+| `STING\TCP.STX`, `UDP.STX`, `RESOLVE.STX`, `DEFAULT.CFG`, `ROUTE.TAB`, `CACHE.DNS` | a folder `C:\STING` |
+| `C:\ACSI_NET.STX` (from the adapter) | `C:\STING` as well |
+| `TOOLS\PING.PRG`, `PING.RSC` | anywhere, e.g. `C:\STING\TOOLS` |
+
+`STING.INF` contains the path of the STING folder (`C:\STING\`). The folder may also be
+on a network drive (e.g. `F:\STING\`): the adapter's drives are there before the AUTO
+folder runs. Leave out `SERIAL.STX` unless you use a modem.
+
+## 4. Install XControl
+
+- `XCONTROL.ACC` in the **root** of C: (accessories load from there only).
+- The CPX modules in `C:\CPX`: from XControl at least `CONFIG.CPX`, from STinG
+  `STING.CPX`, `STNGPORT.CPX` and `STNGPROT.CPX`.
+
+Restart. At start-up STinG loads its modules; you should see
+
+```text
+ACSI_NET.STX 00.04: port ACSI2TNFS installed
+```
+
+## 5. Configure
+
+**Port.** *Desk → Control Panel → STinG Port Setup*:
+
+- port **ACSI2TNFS**
+- IP address: your free address (`192.168.178.210`)
+- subnet mask: `255.255.255.0`
+- **Active** ticked, *Save*
+
+When the port becomes active, the Pico switches its bridge on (USB console `w`:
+*bridge on*).
+
+**Routes.** `C:\STING\ROUTE.TAB` (fields separated by tabs; lines starting with `#` are
+comments):
+
+```text
+192.168.178.0	255.255.255.0	ACSI2TNFS	0.0.0.0
+0.0.0.0		0.0.0.0		ACSI2TNFS	192.168.178.1
+```
+
+The first line: your own network, directly. The second: everything else via the router.
+
+**Name server.** In `C:\STING\DEFAULT.CFG`:
+
+```text
+NAMESERVER  = 192.168.178.1
+THREADING   = 50
+```
+
+`THREADING` is in milliseconds: how often STinG polls the adapter. 50 is STinG's default
+and costs about 1.5 % of the CPU; smaller values give a quicker response and cost more.
+
+Restart once more, or use *STinG Port Setup* to activate the port.
+
+## 6. Try it
+
+- **Ping the router:** `PING.PRG`, host `192.168.178.1` (the default `127.0.0.1` is the
+  Atari itself and does not use the network).
+- **Ping the Atari from a PC:** `ping 192.168.178.210`. STinG answers by itself.
+- **A web page:** `C:\URLVIEW.TTP`, see below.
+- **FTP:** e.g. [gapFTP](https://atariuptodate.de/en/905/gapftp) (17 KB, command line):
+  `GAPFTP.TTP ftp.funet.fi`.
+
+## URLVIEW.TTP
+
+Shows the source of a web page, a screen at a time, like the desktop shows a text file.
+Nothing is written to disk.
+
+```text
+URLVIEW info.cern.ch
+URLVIEW http://192.168.1.10:8000/notes.txt
+URLVIEW -h example.com          (also show the HTTP headers)
+```
+
+- `http://` is optional; upper or lower case does not matter for it or the host name.
+- `-Meer-` at the bottom: any key shows the next screen. **Control-C** quits at once.
+- Without a parameter it asks for the address.
+- **http only, not https:** encryption (TLS) is not feasible on a 68000. Many sites
+  redirect to https; URLVIEW then shows the status line and the new address.
+- Characters outside ASCII (UTF-8, é, ü) show as `?`.
+
+## Speed and limits
+
+- Measured with FTP over the local network: about **24 KB/s** into a network drive and
+  **11 KB/s** onto C: (C: is flash: every small write erases a 4 KB block).
+- The Atari **cannot reach the Pico's own IP address** (the bridge drops such frames:
+  they could not come back over Wi-Fi). Everything else on the network and the internet
+  works.
+- Some routers or mesh systems may not like two IP addresses on one MAC address. Home
+  routers normally have no problem with it.
+- STinG and XControl take memory and a timer interrupt. Some games do not start with
+  them loaded (seen with Crystal Castles, also without `ACSI_NET.STX`): start those
+  without STinG.
+
+## Troubleshooting
+
+| Symptom | Check |
+|---|---|
+| *no ACSI2TNFS found* at start-up | Adapter on, ACSI cable, ACSI id clash (see [ADAPTER.md](ADAPTER.md)) |
+| *firmware without network function* | Firmware too old |
+| *cannot pass frames (no Wi-Fi?)* | Wi-Fi not set up or not connected: `ACSITNFS.PRG`, console `n` |
+| Port cannot be activated | IP address equal to the Pico's, or not a valid address/mask |
+| Ping to the router fails | `ROUTE.TAB`, port active, console `w` (frames counted?) |
+| Names do not resolve | `NAMESERVER` in `DEFAULT.CFG`, ping the router first |
+| Download hangs at once | The target drive is full (Show Info on the drive) |
+
+The USB console key `w` shows the bridge: on/off, the Atari's IP address and counters of
+frames to and from the Atari (dropped, busy, errors).

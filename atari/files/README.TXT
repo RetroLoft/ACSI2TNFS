@@ -8,6 +8,8 @@ What is on this disk?
   README.TXT   this file
   ACSITNFS.PRG configuration program (GEM): Wi-Fi, TNFS drives,
                clock and ACSI device ID
+  ACSI_NET.STX STinG driver: internet on the Atari (see below)
+  URLVIEW.TTP  shows a web page, a screen at a time (see below)
 
 How does it work?
   - The Pico answers ACSI commands on its own device ID
@@ -34,9 +36,10 @@ Changing the ACSI ID
     during a conflict: connect the Pico to a PC over USB and
     open its serial port in a terminal program.
 
-README.TXT and ACSITNFS.PRG are read-only. Deleted one anyway?
-  Key R on the USB console puts them back; your own files on C:
-  stay. No reset needed: the driver tells TOS that C: changed.
+The files above are read-only. Deleted one anyway, or new ones
+  missing after a firmware update? Key R on the USB console puts
+  them on C:; your own files stay. No reset needed: the driver
+  tells TOS that C: changed.
 
 USB console of the Pico (any baud rate, it is USB):
   0-7 = ACSI ID           H = hide/show           K = clock on/off
@@ -53,3 +56,20 @@ Drive letters and TOS versions
   - EmuTOS mounts the drives itself as C:, D:, E:, ...; the
     chosen letters and the network clock do not apply there.
   - TOS 1.0 does not see the adapter.
+
+Internet with STinG
+  ACSI_NET.STX gives the Atari its own IP address on your Wi-Fi
+  network, through the Pico. You need STinG 1.26 and a control
+  panel (XControl) to set it up:
+  1. Copy ACSI_NET.STX into your STING folder.
+  2. STNGPORT.CPX: port ACSI2TNFS, a free IP address of your
+     network (not one your router hands out), the subnet mask,
+     tick Active, Save.
+  3. ROUTE.TAB: your network and a default route via your
+     router through the port ACSI2TNFS.
+  Step by step: docs/NETWORK.md, github.com/RetroLoft/ACSI2TNFS
+
+URLVIEW.TTP
+  Give it an address, e.g. info.cern.ch or host/path. It shows
+  the source a screen at a time: -Meer- waits for a key,
+  Control-C quits. http only, not https (no TLS on a 68000).

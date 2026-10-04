@@ -1,120 +1,110 @@
 # ACSI2TNFS
 
-A Raspberry Pi Pico based device for the Atari ST/STE/Mega/TT **ACSI** (DMA) port.
-The long-term goal is network drives for the Atari over **TNFS**; the current firmware
-emulates an ACSI hard disk backed by the Pico's flash.
+A Raspberry Pi Pico 2 W on the **ACSI** (hard disk) port of an Atari ST, STE, Mega ST
+or TT. To the Atari it is a hard disk; behind it is Wi-Fi.
 
-> Status: early development. Tested on real hardware: the Atari boots from the Pico,
-> mounts drive C:, and reads and writes files (e.g. *Save Desktop*).
+- **Drive C:** a small hard disk (about 1 MB) in the Pico's flash. The Atari can boot
+  from it.
+- **Network drives:** up to three folders on a **TNFS** server (a PC, a NAS or the
+  internet) show up as normal drives, readable and writable.
+- **Clock:** the Pico gets the time from the internet and sets the Atari's clock at
+  start-up.
+- **Internet:** with the STinG TCP/IP stack the Atari gets its own IP address on your
+  Wi-Fi network: ping, FTP, web pages.
 
-## What works
+No software to install for the disk part: the adapter brings its own driver. A GEM
+program, **ACSITNFS.PRG**, sets up Wi-Fi, network drives, clock and the ACSI id.
 
-- **Sniffer mode:** fully passive ACSI bus decoder (commands, DMA bursts, status bytes)
-  over USB serial.
-- **Target mode:** ACSI hard disk of about 1.5 MB in the Pico flash.
-  - Own root-sector boot code and a small resident driver (~1.8 KB, 68000 assembler)
-    that mounts the GEM partition as the first free drive letter.
-  - READ(6)/WRITE(6), INQUIRY, REQUEST SENSE, MODE SENSE, READ CAPACITY and ICD
-    extended (READ/WRITE(10)) commands.
-  - Vendor command `$11 'A' 'T' <sub> <arg>`: configuration protocol for ACSITNFS.PRG,
-    drive letters and network time for the driver.
-- **ACSITNFS.PRG:** GEM configuration program (Wi-Fi, TNFS drives, clock, ACSI id), the
-  ACSI build of [SideTNFS-Config](https://github.com/RetroLoft/SideTNFS-Config).
-- **Diagnostics:** every command logged, byte-by-byte /ACK cross-check on reads,
-  built-in PIO logic analyser (16 ns resolution) and flash sector dumps.
+> Status: working on real hardware (ST with TOS 1.02/1.04 and EmuTOS). The network
+> function (STinG) is new and still being refined.
 
-## Repository layout
+## What you need
 
-| Path | Contents |
+- The ACSI2TNFS board with a **Raspberry Pi Pico 2 W** (`hardware/`: `v2` plugs straight
+  into the Atari, `dev` connects with a ribbon cable and has a pass-through connector).
+- An Atari with an ACSI port and **TOS 1.02 or later**, or EmuTOS. TOS 1.0 does not
+  see the adapter.
+- A 2.4 GHz Wi-Fi network.
+- A USB cable for the Pico: it powers the adapter and gives a console on your PC.
+
+## Getting started
+
+1. **Firmware.** Hold the Pico's BOOTSEL button while you plug it into a PC, and copy
+   `acsi2tnfs.uf2` onto the drive that appears (build it yourself: see
+   [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)). The Pico restarts and prepares drive C:.
+2. **Connect** the adapter to the Atari's ACSI port and power the Pico over USB.
+   Switch the Atari on. You see `ACSI2TNFS v…` and `[OK] Drives installed: C:`.
+3. **Show C: on the desktop.** Select the floppy A: icon, *Options → Install Disk Drive*,
+   letter `C`, *Install*, then *Options → Save Desktop*. C: holds `README.TXT` and the
+   programs below.
+4. **Set up Wi-Fi and network drives.** Start `C:\ACSITNFS.PRG`: *Config* for Wi-Fi
+   (network name, password, country) with *More* for the clock and the ACSI id, and the
+   drive list for the TNFS drives (server, folder, drive letter). *Save*; the Pico
+   restarts and the Atari with it.
+
+From then on the Atari boots with C:, the network drives and the right time.
+
+### Good to know
+
+- **ACSI id.** A new adapter uses ACSI id **6**, so it does not clash with a hard disk on
+  id 0. Every device on the ACSI bus needs its own id.
+- **Drive letters** for network drives: D: to P: (TOS knows 16 drives).
+- **TOS 1.x with several drives:** put `FOLDR100.PRG` (from Atari's AHDI) in `C:\AUTO`,
+  or TOS runs out of folder memory ("use FOLDR100.PRG").
+- **Read-only files on C:** `README.TXT`, `ACSITNFS.PRG`, `ACSI_NET.STX` and
+  `URLVIEW.TTP` come with the firmware. Your own files (DESKTOP.INF, an AUTO folder, …)
+  stay when you update the firmware.
+
+More: [docs/ADAPTER.md](docs/ADAPTER.md) (USB console, ACSI id, hidden mode, C:,
+troubleshooting) and [docs/TNFS.md](docs/TNFS.md) (network drives, running a TNFS server).
+
+## Internet on the Atari (STinG)
+
+The adapter passes network traffic between the Atari and your Wi-Fi network. The Atari
+runs the [STinG](https://github.com/th-otto/STinG) TCP/IP stack (free, for TOS); the
+driver `ACSI_NET.STX` on C: connects STinG to the adapter.
+
+**You need:** STinG 1.26 and XControl 1.31 (both free):
+
+| | Download |
 |---|---|
-| `acsi2tnfs.c` | core0: USB console, sniffer decoder, settings, disk seeding |
-| `acsi_core1.c` | core1: real-time ACSI target, flash-backed disk |
-| `acsi_bus.pio` | PIO programs: /CS and /ACK capture, DMA in/out, logic analyser |
-| `acsi.h` | pin map (PCB), flash layout, shared types |
-| `atari/` | 68000 sources (`boot.s`, `driver.s`), `mkdisk.py` disk builder |
-| `disk_seed.h` | generated by `atari/mkdisk.py`; the built-in disk image |
-| `hardware/` | KiCad projects (`v1`, `dev`) |
-| `ACSI2TNFS_hardwareoverzicht.md` | hardware brief (Dutch) |
-| `project-notities.md` | project notes (Dutch) |
+| STinG 1.26 | [sting126.lzh](https://chebucto.ns.ca/Services/PDA/sting126.lzh) ([page](https://chebucto.ns.ca/Services/PDA/AtariSTComm.shtml)) |
+| XControl 1.31 (control panel for the CPX modules) | [xctl131.zip](https://chebucto.ns.ca/Services/PDA/xctl131.zip) |
+| `ACSI_NET.STX` | on C: of the adapter |
 
-## Building
+**In short:**
 
-Firmware: Pico SDK 2.2.0, `PICO_BOARD=pico`, CMake + Ninja.
+1. Install STinG: `STING.PRG` and `STING.INF` in `C:\AUTO`, the `STING` folder with
+   `TCP.STX`, `UDP.STX`, `RESOLVE.STX`, `DEFAULT.CFG` and `ROUTE.TAB`.
+2. Copy `C:\ACSI_NET.STX` into the `STING` folder.
+3. Install XControl (`XCONTROL.ACC` in the root of C:, the STinG CPX modules in `C:\CPX`)
+   and restart.
+4. *Desk → Control Panel → STinG Port Setup*: port **ACSI2TNFS**, a **free IP address**
+   of your network, the subnet mask, **Active**, *Save*.
+5. `ROUTE.TAB`: your network and a default route via your router, both on `ACSI2TNFS`.
+   `DEFAULT.CFG`: `NAMESERVER =` your router.
 
-```
-cmake -G Ninja -B build
-ninja -C build
-```
+Test with `PING.PRG` (STinG tools) to your router, or show a web page with
+`C:\URLVIEW.TTP` (e.g. `info.cern.ch`; http only, not https).
 
-The version number lives in `version.txt` only. CMake passes it to the firmware,
-and `ninja` runs `atari/mkdisk.py` whenever `version.txt` or an Atari source changes.
-`mkdisk.py` writes `atari/version.inc`, assembles the boot code and driver with
-[vasm](http://sun.hasenbraten.de/vasm/) (`vasmm68k_mot`, or set `VASM`) and writes the
-disk image and `disk_seed.h`. It can also be run on its own:
+Step by step, with example files and troubleshooting: [docs/NETWORK.md](docs/NETWORK.md).
 
-```
-cd atari
-python mkdisk.py          # out/BOOT.BIN, DRV.BIN, disk.img, ../disk_seed.h
-```
+## Documentation
 
-Flash `build/acsi2tnfs.uf2` in BOOTSEL mode. The firmware writes the built-in disk
-image to flash when the boot/driver area differs.
+| | |
+|---|---|
+| [docs/NETWORK.md](docs/NETWORK.md) | Internet with STinG: installation, IP address, ROUTE.TAB, programs, limits |
+| [docs/TNFS.md](docs/TNFS.md) | Network drives: TNFS servers, writing, what to keep in mind |
+| [docs/ADAPTER.md](docs/ADAPTER.md) | ACSI id, USB console, system files on C:, TOS versions, troubleshooting |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Building, repository layout, ACSI protocol, test tools |
+| `ACSI_NET-ontwerp.md`, `project-notities.md` | Design and project notes (Dutch) |
 
-## ACSI id
+## Credits
 
-A new adapter answers on ACSI id 6 (`ACSI_DEFAULT_ID`), not 0: an internal Mega ST
-disk, a Megafile or an UltraSatan usually sits on 0, and two devices on one id answer
-at the same time. Then the Atari cannot reach the adapter either, so the id can be
-changed in ways that do not need the ACSI bus:
-
-- USB console: keys `0`-`7` (always works, also during a conflict)
-- ACSITNFS.PRG: Config > More > ACSI device ID (used after Save and a restart)
-- planned: the BOOT button of the Pimoroni Pico Plus 2 W
-
-## USB console
-
-`s` sniffer · `t` target · `0`-`7` ACSI id · `H` hide/show · `K` network clock on/off ·
-`R` restore the system files on C: · `F` rewrite C: completely · `n`/`N` network
-status/reconnect · `v` verbose · `i` info · `d`/`x` sector dumps · `L`/`l` arm/dump logic
-analyser · `B` reboot to BOOTSEL
-
-After `R` or `F` the driver reports a media change: GEMDOS drops its cached FAT and
-directories (also unwritten ones) and reads C: again, no reset needed. Until the driver has
-picked up the change the adapter answers only its own vendor command, so a stale FAT is
-never written; with another hard disk driver that means until the next Atari reset.
-
-## System files on C:
-
-README.TXT and ACSITNFS.PRG are read-only. A new firmware brings them up to date at
-start-up and keeps every other file on C: (DESKTOP.INF, an AUTO folder, ...). A system
-file that was deleted comes back only with `R` on the USB console.
-
-## TNFS drives
-
-Every enabled TNFS slot (up to 3) is a virtual FAT16 partition generated from a scan of
-the server. They can be written: GEMDOS writes plain sectors (data first, the FAT and the
-directory entry at Fclose), so every written sector goes to a hidden file `/.A2T.TMP` on
-the server and is read back from there. A second after the last write the Pico walks the
-directory tree as GEMDOS has it and applies new, changed, renamed and deleted files and
-directories to the server. Files without write permission on the server show as read-only.
-
-## Drive letters and TOS versions
-
-- TOS knows 16 drives (A:-P:), so TNFS drives get a letter from D: to P:. Higher letters
-  overran GEMDOS' drive table and broke Fsnext.
-- TOS 1.x with several drives needs FOLDR100.PRG (AHDI) in `C:\AUTO`.
-- EmuTOS mounts the partitions with its own ACSI driver (C:, D:, E:, ...); our driver,
-  letters and network clock do not apply there. It reads up to 255 sectors per command.
-- Tested: TOS 1.02, 1.04, EmuTOS. TOS 1.0 does not see the adapter.
-
-## Hardware notes
-
-The `dev` board drives /DRQ through a BC547. It releases the line about 1 µs late, which
-makes the ST DMA chip strobe /ACK once or twice more. The firmware handles this (gap-free
-DMA streaming, receive DMA started before the PIO), but a hardware fix is planned; see
-`project-notities.md`.
-
-## References
-
-- Atari ACSI/DMA Integration Guide, 28 June 1991
-- P. Putnik, ACSI/DMA experiences: https://atari.8bitchip.info/AcsiDmaExD.html
+- Configuration program: the ACSI build of
+  [SideTNFS-Config](https://github.com/RetroLoft/SideTNFS-Config).
+- `ACSI_NET.STX` follows the structure of
+  [USB_NET.STX (usbsting)](https://github.com/czietz/usbsting) by Roger Burrows and
+  Christian Zietz (GPL-2+), and the frame bridge follows
+  [PicoWifi](https://github.com/czietz/picowifi).
+- STinG by Peter Rottengatter and Ronald Andersson.

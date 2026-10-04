@@ -208,7 +208,10 @@ uint32_t net_ctrl(const uint8_t *b)
     uint32_t cmd = get16(b + 6), ip = get32(b + 8), mask = get32(b + 12);
     ctrl_count++;
     if (memcmp(b, "ATN", 4) || get16(b + 4) != NET_PROTO_VERSION) err = 1;  /* not for us  */
-    else if (cmd == 0) atari_enabled = false;
+    else if (cmd == 0) {
+        atari_enabled = false;
+        rx_tail = rx_head;                                                  /* nothing left */
+    }
     else if (cmd != 1) err = 2;                                              /* unknown     */
     else if (!ip || ip == 0xffffffffu || !mask || (~mask & (~mask + 1))) err = 3; /* bad IP/mask */
     else if (pub_link && ip == pub_ip) err = 4;                              /* Pico's IP   */

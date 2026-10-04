@@ -175,6 +175,14 @@ void cfgrpc_request(const uint8_t *blk512);   /* core1: vendor sub 5 */
 void cfgrpc_response(uint8_t *out512);        /* core1: vendor sub 6 */
 void cfgrpc_poll(void);                       /* core0: main loop    */
 void net_console_status(void);                         /* core0: 'n' command   */
+
+/* ACSI_NET, STinG network over ACSI (netbridge.c, vendor subs 0x20-0x2f) */
+void net_bridge_publish(void);                /* core0: Wi-Fi state for core1 */
+void net_info(uint8_t *out512);               /* core1: NET_INFO              */
+uint32_t net_ctrl(const uint8_t *in512);      /* core1: NET_CTRL, 0 = stored  */
+void net_bridge_reset(void);                  /* core1: Atari reset           */
+void net_test_pattern(uint8_t *buf, uint32_t n);  /* core1: NET_TEST          */
+void net_bridge_console(void);                /* core0: 'w' command           */
 void core1_main(void);
 void cfg_save(void);
 const char *scsi_opname(uint8_t op);

@@ -678,6 +678,22 @@ static uint8_t exec_cmd(const uint8_t *cdb, uint8_t cdb_len, uint32_t *bytes)
             g_cfg.mute_until_reset = false;
             *bytes = 512;
             return send_reply(512);
+        case 0x20:  /* ACSI_NET NET_INFO, 512 bytes Pico -> Atari (netbridge.c) */
+            net_info(reply);
+            *bytes = 512;
+            return send_reply(512);
+        case 0x21:  /* ACSI_NET NET_CTRL, 512 bytes Atari -> Pico: settings only */
+            if (!dma_in(reply, 512)) return 0x02;
+            *bytes = 512;
+            if (net_ctrl(reply) == 0) return 0x00;
+            set_sense(0x24, 0x05, 0x26);                /* invalid field in parameter list */
+            return 0x02;
+        case 0x2f:  /* ACSI_NET NET_TEST: c[4] = 1..3 sectors of a known pattern,
+                       for testing short DMA reads (the Atari may ask for more) */
+            if (c[4] < 1 || c[4] > 3) break;
+            net_test_pattern(wbuf, c[4]);
+            *bytes = c[4] * 512u;
+            return dma_out2(wbuf, c[4] * 512u, NULL, 0) ? 0x00 : 0x02;
         }
         break;
     }
@@ -800,6 +816,7 @@ static void __not_in_flash_func(target_loop)(void)
             if (!in_reset) {
                 in_reset = true;
                 g_cfg.mute_until_reset = false;     /* fresh GEMDOS: safe again */
+                net_bridge_reset();                 /* STinG is gone */
                 stage_flush();                      /* core0 may change C: now */
                 stage_blk = -1;
                 bus_idle();

@@ -1636,6 +1636,7 @@ void net_init(void)
 
 void net_poll(void)
 {
+    net_bridge_publish();                           /* Wi-Fi state for NET_INFO */
     if (g_set.rtc_enabled && !test_req && net_link_up() && (clk_sync_now || time_reached(ntp_next))) {
         clk_sync_now = false;
         bool ok = ntp_sync();

@@ -13,3 +13,4 @@ _autosave-*
 # VS Code: keep project config
 !.vscode/*
 atari/version.inc
+atari/tools/NETTEST.TTP

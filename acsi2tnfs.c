@@ -249,7 +249,7 @@ static void help(void)
     printf("\nACSI2TNFS console. mode=%s id=%u verbose=%s%s\n",
            g_cfg.mode == MODE_SNIFF ? "SNIFF" : "TARGET", g_cfg.acsi_id, g_cfg.verbose ? "on" : "off",
            g_cfg.hidden ? "  ** HIDDEN from the Atari **" : "");
-    printf("  s=sniffer  t=target  0-7=ACSI id  v=verbose  H=hide/show  K=clock  R=restore C: files  i=info  B=bootsel  h=help\n\n");
+    printf("  s=sniffer  t=target  0-7=ACSI id  v=verbose  H=hide/show  K=clock  R=restore C: files  w=Atari net  i=info  B=bootsel  h=help\n\n");
 }
 
 static void info(void)
@@ -281,6 +281,7 @@ static void console(int ch)
         break;
     case 'i': info(); break;
     case 'n': net_console_status(); break;
+    case 'w': net_bridge_console(); break;
     case 'N': printf("network test requested\n"); net_request_test(); break;
     case 'R':
         /* restore the system files without touching the user's files; the

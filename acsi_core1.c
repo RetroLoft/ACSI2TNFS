@@ -688,6 +688,26 @@ static uint8_t exec_cmd(const uint8_t *cdb, uint8_t cdb_len, uint32_t *bytes)
             if (net_ctrl(reply) == 0) return 0x00;
             set_sense(0x24, 0x05, 0x26);                /* invalid field in parameter list */
             return 0x02;
+        case 0x22: {    /* ACSI_NET NET_TX: c[4] = 1..3 sectors, header + frame */
+            if (c[4] < 1 || c[4] > 3) break;
+            uint8_t *slot = net_tx_slot();
+            *bytes = c[4] * 512u;
+            if (!dma_in(slot ? slot : wbuf, c[4] * 512u)) return 0x02;
+            if (!slot) return 0x08;                     /* BUSY: ring full, try again */
+            if (net_tx_commit(slot, c[4]) == 0) return 0x00;
+            set_sense(0x24, 0x05, 0x26);                /* bad length or source MAC, or off */
+            return 0x02;
+        }
+        case 0x23: {    /* ACSI_NET NET_RX: c[4] = most sectors the Atari takes;
+                           we send only what the frame needs, 1 when empty */
+            if (c[4] < 1) break;
+            uint32_t n;
+            uint8_t *b = net_rx_next(reply, c[4], &n);
+            *bytes = n * 512u;
+            if (!dma_out2(b, n * 512u, NULL, 0)) return 0x02;
+            net_rx_sent(b);
+            return 0x00;
+        }
         case 0x2f:  /* ACSI_NET NET_TEST: c[4] = 1..3 sectors of a known pattern,
                        for testing short DMA reads (the Atari may ask for more) */
             if (c[4] < 1 || c[4] > 3) break;
@@ -761,7 +781,7 @@ static void __not_in_flash_func(handle_command)(uint32_t s0)
     }
     if (res == RES_RESET) goto done;
     if (res != RES_OK) L.status = 0x02;
-    if (L.status) {
+    if (L.status && L.status != 0x08) {     /* BUSY (NET_TX ring full) is no error */
         g_stats.errors++;
         if (sense_code == 0) set_sense(0x03, 0x04, 0x44);
     }
@@ -776,6 +796,10 @@ done:
     L.us = time_us_32() - t0;
     uint8_t idx = cmd_log_idx++ % CMD_LOG_N;
     g_cmd_log[idx] = L;
+    /* NET_TX / NET_RX come many times a second from STinG: count them ('w'),
+       log them only when they fail */
+    bool net_frame = (L.cdb[0] & 0x1f) == 0x11 && L.cdb[3] >= 0x22 && L.cdb[3] <= 0x23;
+    if (net_frame && !L.result && (L.status == 0 || L.status == 0x08)) return;
     if (g_cfg.verbose || L.status || L.result) ev_push(EV_CMD, 0, idx);
 }
 

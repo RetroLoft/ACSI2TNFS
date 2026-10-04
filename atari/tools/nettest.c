@@ -1,5 +1,5 @@
 /*
- * NETTEST.TTP - test tool for ACSI_NET phase 1 (see ACSI_NET-ontwerp.md)
+ * NETTEST.TTP - test tool for ACSI_NET phases 1-2 (see ACSI_NET-ontwerp.md)
  *
  *   NETTEST            find the adapter, show NET_INFO, run the short DMA
  *                      read test
@@ -8,6 +8,8 @@
  *   NETTEST C a.b.c.d m.m.m.m   NET_CTRL: store the Atari IP and mask
  *   NETTEST D          NET_CTRL: off
  *   NETTEST U          send an unknown network sub (0x2e): must be refused
+ *   NETTEST A [ip [target [s]]]  bridge on, ARP request to the target (router)
+ *   NETTEST L [ip [s]]           bridge on, listen, answer ARP for our IP
  *
  * ACSI is driven directly, as in atari/acsi.inc, in supervisor mode and
  * with flock taken with TAS (as a STinG driver will have to).
@@ -270,6 +272,217 @@ static int short_read_test(int rounds)
     return fails[1] + fails[2] + fails[3] + guard_bad + s0_bad == 0;
 }
 
+/* ------------------------------------------------------------------------
+ * Phase 2: real Ethernet frames through the bridge, while reading files from
+ * C: and from a TNFS drive in between (disk and TNFS traffic at the same time)
+ * ---------------------------------------------------------------------- */
+#define NET_TX  0x22
+#define NET_RX  0x23
+#define CHUNK   16384L
+
+static unsigned char mymac[6];
+static unsigned long my_ip, my_mask, pico_ip, gw_ip;
+static unsigned char txbuf[3 * 512] __attribute__((aligned(2)));
+static unsigned char *chunkbuf;
+
+typedef struct {
+    const char *name;
+    int fd;
+    long nchunk, next, reads, errors, lastlen;
+    unsigned long sum[64];
+} FTEST;
+
+static FTEST files[2];
+
+static unsigned long csum(const unsigned char *p, long n)
+{
+    unsigned long s = 0;
+    while (n--) s = (s << 1 | s >> 31) + *p++;
+    return s;
+}
+
+static long chunk_len(FTEST *f, long size, long k)
+{
+    long l = size - k * CHUNK;
+    return l > CHUNK ? CHUNK : l;
+}
+
+/* read the whole file once (before the bridge is on): reference sums */
+static void ftest_init(FTEST *f, const char *name)
+{
+    long size, k;
+    memset(f, 0, sizeof *f);
+    f->name = name;
+    f->fd = (int)Fopen(name, 0);
+    if (f->fd < 0) { printf("  %s: not found, skipped" NL, name); return; }
+    size = Fseek(0, f->fd, 2);
+    f->nchunk = (size + CHUNK - 1) / CHUNK;
+    if (f->nchunk > 64) f->nchunk = 64;
+    for (k = 0; k < f->nchunk; k++) {
+        long l = chunk_len(f, size, k);
+        Fseek(k * CHUNK, f->fd, 0);
+        if (Fread(f->fd, l, chunkbuf) != l) { f->nchunk = k; break; }
+        f->sum[k] = csum(chunkbuf, l) ^ (unsigned long)l << 16;
+    }
+    f->lastlen = size;
+    printf("  %s: %ld bytes, %ld chunks of 16 KB" NL, name, size, f->nchunk);
+}
+
+static void ftest_step(FTEST *f)
+{
+    long k, l;
+    if (f->fd < 0 || !f->nchunk) return;
+    k = f->next++ % f->nchunk;
+    l = chunk_len(f, f->lastlen, k);
+    Fseek(k * CHUNK, f->fd, 0);
+    f->reads++;
+    if (Fread(f->fd, l, chunkbuf) != l || (csum(chunkbuf, l) ^ (unsigned long)l << 16) != f->sum[k])
+        if (!f->errors++) printf("  %s: chunk %ld read wrong!" NL, f->name, k);
+}
+
+static void ip_txt(char *s, const unsigned char *p)
+{
+    sprintf(s, "%u.%u.%u.%u", p[0], p[1], p[2], p[3]);
+}
+
+static void describe(long t_ms, const unsigned char *f, unsigned len)
+{
+    char a[16], b[16];
+    unsigned type = get16(f + 12);
+    printf("  %5ld ms  %4u B  from %02x:%02x:%02x:%02x:%02x:%02x  ", t_ms, len,
+           f[6], f[7], f[8], f[9], f[10], f[11]);
+    if (type == 0x0806 && len >= 42) {
+        ip_txt(a, f + 28); ip_txt(b, f + 38);
+        printf("ARP %s %s -> %s" NL, get16(f + 20) == 1 ? "request" : "reply  ", a, b);
+    } else if (type == 0x0800 && len >= 34) {
+        ip_txt(a, f + 26); ip_txt(b, f + 30);
+        printf("IPv4 proto %u %s -> %s" NL, f[23], a, b);
+    } else
+        printf("type $%04x" NL, type);
+}
+
+/* NET_TX: header + frame, padded to 60 bytes */
+static long send_frame(const unsigned char *f, unsigned len)
+{
+    int n;
+    if (len < 60) len = 60;
+    memset(txbuf, 0, sizeof txbuf);
+    txbuf[0] = len >> 8; txbuf[1] = len;
+    memcpy(txbuf + 8, f, len);
+    n = (8 + len + 511) / 512;
+    return cmd(NET_TX, (unsigned char)n, txbuf, n, 1);
+}
+
+static unsigned arp_frame(unsigned char *f, int op, const unsigned char *dmac,
+                          const unsigned char *tha, unsigned long tpa)
+{
+    memset(f, 0, 60);
+    memcpy(f, dmac, 6);
+    memcpy(f + 6, mymac, 6);
+    f[12] = 0x08; f[13] = 0x06;                 /* ARP */
+    f[15] = 1;                                  /* Ethernet */
+    f[16] = 0x08;                               /* IPv4 */
+    f[18] = 6; f[19] = 4;
+    f[21] = (unsigned char)op;
+    memcpy(f + 22, mymac, 6);
+    put32(f + 28, my_ip);
+    if (tha) memcpy(f + 32, tha, 6);
+    put32(f + 38, tpa);
+    return 60;
+}
+
+/* mode 'A': ARP request to target, wait for the reply; mode 'L': listen and
+   answer ARP requests for our IP. Both read files in between. */
+static int bridge_test(char mode, unsigned long target, long seconds)
+{
+    static const unsigned char bcast[6] = { 255, 255, 255, 255, 255, 255 };
+    unsigned char f[64];
+    long t0, now, next_arp = 0, tx_ok = 0, tx_busy = 0, tx_err = 0;
+    long polls = 0, poll_ticks = 0, frames = 0, shown = 0, loops = 0;
+    long arp_req_us = 0, arp_replies = 0, ipv4 = 0, rx_err = 0;
+    int got_reply = 0, which = 0;
+    char a[16];
+
+    chunkbuf = (unsigned char *)Malloc(CHUNK);
+    if (!chunkbuf) { printf("no memory" NL); return 0; }
+    printf("Reference read of the test files:" NL);
+    ftest_init(&files[0], "C:\\ACSITNFS.PRG");
+    ftest_init(&files[1], "F:\\GAMES\\BIG.BI4");
+
+    net_ctrl(1, my_ip, my_mask);
+    if (a_result != 0) return 0;
+    put32(f, target);
+    ip_txt(a, f);
+    if (mode == 'A') printf("ARP request for %s every second, %ld s:" NL, a, seconds);
+    else printf("Listening %ld s, answering ARP for our IP:" NL, seconds);
+
+    t0 = Supexec(get_hz);
+    do {
+        long t;
+        now = Supexec(get_hz);
+        loops++;
+        if (mode == 'A' && !got_reply && now >= next_arp) {
+            long r = send_frame(f, arp_frame(f, 1, bcast, NULL, target));
+            if (r == 0) tx_ok++; else if (r == 8) tx_busy++; else tx_err++;
+            next_arp = now + 200;
+        }
+        for (;;) {                              /* everything queued, at most 4 */
+            long r;
+            unsigned len;
+            t = Supexec(get_hz);
+            r = cmd(NET_RX, 3, dmabuf, 3, 0);
+            poll_ticks += Supexec(get_hz) - t;
+            polls++;
+            if (r != 0) { if (!rx_err++) printf("  NET_RX status %ld" NL, r); break; }
+            len = get16(dmabuf);
+            if (!len) break;
+            frames++;
+            if (shown++ < 25) describe((now - t0) * 5, dmabuf + 8, len);
+            if (get16(dmabuf + 8 + 12) == 0x0806) {
+                const unsigned char *p = dmabuf + 8;
+                if (get16(p + 20) == 2 && get32(p + 28) == target) got_reply = 1;
+                if (get16(p + 20) == 1 && get32(p + 38) == my_ip) {
+                    arp_req_us++;
+                    if (mode == 'L') {
+                        unsigned char sha[6];
+                        unsigned long spa = get32(p + 28);
+                        memcpy(sha, p + 22, 6);
+                        if (send_frame(f, arp_frame(f, 2, sha, sha, spa)) == 0) arp_replies++;
+                        else tx_err++;
+                    }
+                }
+            } else if (get16(dmabuf + 8 + 12) == 0x0800)
+                ipv4++;
+            if (frames % 4 == 0) break;
+        }
+        ftest_step(&files[which]);                  /* disk / TNFS in between */
+        which ^= 1;
+    } while (now - t0 < seconds * 200);
+
+    printf(NL "Result:" NL);
+    if (mode == 'A') printf("  ARP reply from %s: %s" NL, a, got_reply ? "YES" : "no");
+    printf("  frames received %ld (ARP requests for us %ld, IPv4 for us %ld)" NL,
+           frames, arp_req_us, ipv4);
+    printf("  NET_TX ok %ld, busy %ld, errors %ld; ARP replies sent %ld" NL,
+           tx_ok + arp_replies, tx_busy, tx_err, arp_replies);
+    printf("  NET_RX polls %ld (%ld failed), %ld us each" NL, polls, rx_err, polls ? poll_ticks * 5000L / polls : 0);
+    printf("  %s: %ld reads, %ld errors" NL, files[0].name, files[0].reads, files[0].errors);
+    printf("  %s: %ld reads, %ld errors" NL, files[1].name, files[1].reads, files[1].errors);
+    printf("  bridge stays on (NETTEST D turns it off, an Atari reset too)" NL);
+    if (files[0].fd >= 0) Fclose(files[0].fd);
+    if (files[1].fd >= 0) Fclose(files[1].fd);
+    Mfree(chunkbuf);
+    return (mode != 'A' || got_reply) && !rx_err && !files[0].errors && !files[1].errors;
+}
+
+static void take_info(void)                     /* after net_info(): our addresses */
+{
+    memcpy(mymac, dmabuf + 10, 6);
+    pico_ip = get32(dmabuf + 16);
+    my_mask = get32(dmabuf + 20);
+    gw_ip = get32(dmabuf + 24);
+}
+
 int main(int argc, char **argv)
 {
     char op = argc > 1 ? argv[1][0] & ~0x20 : 0;
@@ -278,7 +491,7 @@ int main(int argc, char **argv)
     logf = fopen("NETTEST.LOG", "ab");
     fputs("\033E", stdout);                     /* clear screen, not in the log */
     if (logf) fprintf(logf, "----" NL);
-    printf("NETTEST - ACSI_NET phase 1, arguments:");
+    printf("NETTEST - ACSI_NET test, arguments:");
     for (i = 1; i < argc; i++) printf(" %s", argv[i]);
     printf(NL NL);
     if (find_adapter() < 0) {
@@ -302,6 +515,17 @@ int main(int argc, char **argv)
             break;
         case 'D':
             if ((ok = net_info(1)) != 0) { net_ctrl(0, 0, 0); net_info(0); }
+            break;
+        case 'A':       /* NETTEST A [atari-ip [target-ip [seconds]]] */
+        case 'L':       /* NETTEST L [atari-ip [seconds]] */
+            if (!(ok = net_info(1))) break;
+            take_info();
+            my_ip = parse_ip(argc > 2 ? argv[2] : "192.168.178.50");
+            if (op == 'A')
+                ok = bridge_test('A', argc > 3 ? parse_ip(argv[3]) : gw_ip,
+                                 argc > 4 ? atol(argv[4]) : 10);
+            else
+                ok = bridge_test('L', my_ip, argc > 3 ? atol(argv[3]) : 60);
             break;
         case 'U': {
             long r = cmd(0x2e, 0, dmabuf, 1, 0);

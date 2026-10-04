@@ -272,7 +272,7 @@ offset 8  ..   Ethernet-frame  dest MAC, src MAC, type, payload (zonder FCS)
 | 14 | **TCP.STX-bug** | Sommige servers geven problemen | Bijgewerkte TCP.STX van chzsoft aanbevelen |
 | 15 | **Atari-reset met STinG actief** | Ringen houden oude frames | Brug uit en ringen leeg bij /RESET (core1) |
 
-Throughput, ruwe schatting: een NET_RX/NET_TX van 3 sectoren kost ~1,2–1,5 ms ACSI (gemeten: 4 KB in 2,8 ms). Het plafond is ruim 500 KB/s, maar in de praktijk begrenst STinG op een 8 MHz 68000 het tot enkele tientallen KB/s, en de pollinterval (50 ms standaard, 10 ms met THREADING 2) bepaalt de latentie. Elke lege poll kost ~0,5 ms, dus ~1 % CPU bij 50 ms.
+Throughput, ruwe schatting: een NET_RX/NET_TX van 3 sectoren kost ~1,2–1,5 ms ACSI (gemeten: 4 KB in 2,8 ms). Het plafond is ruim 500 KB/s, maar in de praktijk begrenst STinG op een 8 MHz 68000 het tot enkele tientallen KB/s, en de pollinterval (50 ms standaard, 10 ms met THREADING = 10) bepaalt de latentie. Elke lege poll kost ~0,5 ms, dus ~1 % CPU bij 50 ms.
 
 ---
 

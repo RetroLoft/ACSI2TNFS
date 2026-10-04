@@ -109,6 +109,25 @@ Let op: `THREADING` in STinGs `DEFAULT.CFG` is in **milliseconden** (STinG deelt
 
 Bekende beperking: de Atari kan het eigen IP van de Pico (192.168.178.103) niet pingen; de brug laat zulke frames bewust vallen (zie ontwerp, risico 6). PING.PRG gebruikt standaard 127.0.0.1 (loopback in STinG zelf).
 
+## ACSI_NET fase 5: testverslag (5 oktober 2026) - UDP, TCP, DNS
+
+Client: gapFTP 0.88 (17 KB TTP, commandoregel, STinG). Server: Python `pyftpdlib` op de laptop (poort 2121).
+
+| Test | Resultaat |
+|---|---|
+| FTP naar de laptop, download naar F: (TNFS) | HELLO.TXT, BIG.BIN (300 KB, 12 s), MEG.BIN (1 MB, 43 s): **alle drie identiek**; ~24 KB/s; ondertussen 954 reads en 2095 writes zonder fout, TNFS-syncs liepen ertussendoor |
+| `open ftp.funet.fi` (DNS via de router, internet) | werkt |
+| Download BIG.BIN naar C: | 27–30 s (~11 KB/s), identiek |
+| Pico-tellers over alle tests | 0 frames gedropt, 0 BUSY, 0 zendfouten |
+
+Wat er misging en waarom (geen netwerkfout):
+- Eerste download naar C: liep vast: C: was vol. MEG.BIN (1 MB) paste niet; na de reset bleven ~700 KB aan **verloren clusters** in de FAT staan (bestand nooit gesloten), zodat ook na weggooien 0 bytes vrij bleef en gapFTP bij het eerste stuk data bleef hangen (TCP-venster dicht). Opgelost met console `F` (C: opnieuw) en de backup terugzetten.
+- Naar C: is de helft zo snel als naar F:: gapFTP schrijft per 512 bytes, en elke schrijfopdracht naar C: kost een volledige flash-wis van 4 KB (~42 ms). Ook onnodige slijtage.
+
+Verbeterpunten (los van ACSI_NET):
+1. Console-commando "C: controleren": verloren clusters vinden en (na bevestiging) vrijgeven, zoals CHKDSK.
+2. Schrijven naar C: bufferen: meerdere writes naar hetzelfde 4 KB-blok samen wegschrijven.
+
 ## Nog testen: ACSI2SD achter de adapter (doorlusconnector)
 
 De dev-print heeft twee 20-polige connectoren die alle signalen doorverbinden, zoals bij Lotharek's ACSI2SD. Een tweede apparaat hangt dan gewoon parallel op de bus, met een eigen ACSI-ID. Nog niet getest: de ACSI2SD is hier niet aanwezig.

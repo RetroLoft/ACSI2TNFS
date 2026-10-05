@@ -453,6 +453,11 @@ typedef struct {
     uint8_t  tmp_handle;
     uint32_t last_wr_ms;
     char     status[96];
+    /* not available (no Wi-Fi, no server, mount refused): the drive shows
+       one read-only file NET_ERR.TXT with this text, as SideTNFS does */
+    bool     failed;
+    uint16_t errlen;
+    char     errtxt[400];
     char     dir[160];              /* top level names, for the info text    */
 } vdrive_t;
 
@@ -1318,12 +1323,49 @@ static bool vfat_write(uint32_t rel, const uint8_t *buf)
     return true;
 }
 
+/* drive i cannot be used: show NET_ERR.TXT with the reason instead of an
+   empty drive, and tell GEMDOS to read it again */
+static void vdrive_fail(int i, const char *reason)
+{
+    vdrive_t *d = &vd[i];
+    int n = snprintf(d->errtxt, sizeof d->errtxt,
+                     "ACSI2TNFS: network drive not available\r\n"
+                     "\r\n"
+                     "Reason : %s\r\n"
+                     "Server : %s:%u\r\n"
+                     "Folder : %s\r\n"
+                     "\r\n"
+                     "Check that the TNFS server runs and can be reached,\r\n"
+                     "then press N on the USB console of the adapter or\r\n"
+                     "restart it. The drive reads its folders again then.\r\n",
+                     reason, d->server, d->port, d->path);
+    d->errlen = (uint16_t)(n < 0 ? 0 : n < (int)sizeof d->errtxt ? n : (int)sizeof d->errtxt - 1);
+    d->ready = false;
+    d->failed = true;
+    disk_changed(1 + i);
+}
+
 /* one sector of the current drive's virtual partition */
 static bool vfat_sector(uint32_t rel, uint8_t *buf)
 {
     vdrive_t *d = cur;
     memset(buf, 0, 512);
     if (rel == 0) { vfat_bootsector(buf); return true; }
+    if (!d->ready) {                                        /* NET_ERR.TXT or empty */
+        if (!d->failed) return true;
+        if (rel < 1 + 2 * V_SPF) {
+            if ((rel - 1) % V_SPF == 0) {                   /* clusters 0, 1 and 2 */
+                put16(buf, 0xfff8);
+                put16(buf + 2, 0xffff);
+                put16(buf + 4, 0xffff);
+            }
+        } else if (rel == 1 + 2 * V_SPF) {                  /* first root sector */
+            vdirent(buf, "NET_ERR TXT", 0x01, 0, 2, d->errlen);
+        } else if (rel == V_DATREC) {                       /* cluster 2 */
+            memcpy(buf, d->errtxt, d->errlen);
+        }
+        return true;
+    }
     if (BIT(wbits[d - vd], rel)) return tmp_io(rel, buf, false);   /* written by the Atari */
     if (rel < 1 + 2 * V_SPF) {                              /* FAT 1 and FAT 2 */
         uint32_t c0 = ((rel - 1) % V_SPF) * 256;
@@ -1664,8 +1706,12 @@ static void tnfs_connect_and_scan(void)
     valloc_n = 0;
     vpool[0] = 0;
     vpool_len = 1;
+    for (int i = 0; i < nvd; i++) vd[i].failed = false;
     if (!wifi_connect()) {
         if (g_set.rtc_enabled && clk_state != CLK_VALID) clk_state = CLK_NONE;
+        char why[120];
+        snprintf(why, sizeof why, "no Wi-Fi (%s)", wifi_status);
+        for (int i = 0; i < nvd; i++) vdrive_fail(i, why);
         return;
     }
     /* the time first: the driver may be waiting for it at boot */
@@ -1681,7 +1727,11 @@ static void tnfs_connect_and_scan(void)
         vdrive_t *d = cur = &vd[i];
         d->dir[0] = 0;
         printf("net: TNFS %d: %s:%u %s\n", i + 1, d->server, d->port, d->path);
-        if (!tnfs_mount()) { printf("net: TNFS %d %s\n", i + 1, d->status); continue; }
+        if (!tnfs_mount()) {
+            printf("net: TNFS %d %s\n", i + 1, d->status);
+            vdrive_fail(i, d->status);
+            continue;
+        }
         vfat_scan();
         for (uint16_t k = d->root + 1; k < d->node_end; k++) {
             char p[256];

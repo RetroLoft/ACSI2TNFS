@@ -187,6 +187,7 @@ void net_rx_sent(uint8_t *buf);
 uint8_t *net_tx_slot(void);                   /* core1: NET_TX, NULL = full   */
 uint32_t net_tx_commit(uint8_t *slot, uint32_t sectors);
 void net_bridge_console(void);                /* core0: 'w' command           */
+void net_bridge_trace(void);                  /* core0: 'W' frame timeline    */
 void core1_main(void);
 void cfg_save(void);
 const char *scsi_opname(uint8_t op);

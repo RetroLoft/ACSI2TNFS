@@ -70,6 +70,38 @@ static void put32(uint8_t *p, uint32_t v) { put16(p, v >> 16); put16(p + 2, v); 
 static uint32_t get16(const uint8_t *p) { return (uint32_t)p[0] << 8 | p[1]; }
 static uint32_t get32(const uint8_t *p) { return get16(p) << 16 | get16(p + 2); }
 
+/* timeline of the last frames, for finding where time goes (console W):
+   one ring per core, so each has a single writer */
+enum { TR_RX_IN, TR_RX_OUT, TR_TX_IN, TR_TX_OUT };
+typedef struct { uint32_t t; uint32_t val; uint16_t len; uint8_t type, flags; } trace_t;
+#define TR_N 256
+static trace_t tr0[TR_N], tr1[TR_N];        /* core0: Wi-Fi side, core1: ACSI side */
+static volatile uint32_t tr0_n, tr1_n;
+
+/* TCP: sequence number (frames to the Atari) or acknowledgement (frames
+   from it), low 32 bits, and the flags; other frames: 0 */
+static void trace(trace_t *ring, volatile uint32_t *n, uint8_t type, const uint8_t *f, uint32_t len)
+{
+    trace_t *e = &ring[*n % TR_N];
+    e->t = time_us_32();
+    e->type = type;
+    e->len = (uint16_t)len;
+    e->val = 0;
+    e->flags = 0;
+    if (len >= 54 && f[12] == 0x08 && f[13] == 0x00 && f[23] == 6) {
+        uint32_t ihl = (f[14] & 15) * 4;
+        const uint8_t *t = f + 14 + ihl;
+        if (14 + ihl + 20 <= len) {
+            bool rx = type == TR_RX_IN || type == TR_RX_OUT;
+            const uint8_t *v = t + (rx ? 4 : 8);
+            e->val = (uint32_t)v[0] << 24 | (uint32_t)v[1] << 16 | (uint32_t)v[2] << 8 | v[3];
+            e->flags = t[13];
+        }
+    }
+    __dmb();
+    (*n)++;
+}
+
 /* lwIP keeps addresses in network order: as a number, a.b.c.d = 0xaabbccdd */
 static uint32_t ip_num(uint32_t lwip) { return __builtin_bswap32(lwip); }
 
@@ -101,6 +133,7 @@ static err_t bridge_input(struct pbuf *p, struct netif *inp)
         uint32_t s = rx_head % RX_SLOTS;
         pbuf_copy_partial(p, rx_buf[s] + HDR, (u16_t)len, 0);
         rx_len[s] = (uint16_t)len;
+        trace(tr0, &tr0_n, TR_RX_IN, rx_buf[s] + HDR, len);
         __dmb();
         rx_head++;
         st_rx++;
@@ -129,6 +162,7 @@ static void bridge_work(async_context_t *ctx, async_when_pending_worker_t *w)
     while (tx_tail != tx_head) {
         uint32_t s = tx_tail % TX_SLOTS;
         if (on && pub_link) {
+            trace(tr0, &tr0_n, TR_TX_OUT, tx_buf[s] + HDR, tx_len[s]);
             if (cyw43_send_ethernet(&cyw43_state, CYW43_ITF_STA, tx_len[s], tx_buf[s] + HDR, false) == 0)
                 st_tx++;
             else
@@ -265,6 +299,7 @@ uint8_t *net_rx_next(uint8_t *empty, uint32_t max_sectors, uint32_t *sectors)
 void net_rx_sent(uint8_t *b)                /* that frame reached the Atari */
 {
     if (rx_tail != rx_head && b == rx_buf[rx_tail % RX_SLOTS]) {
+        trace(tr1, &tr1_n, TR_RX_OUT, b + HDR, rx_len[rx_tail % RX_SLOTS]);
         __dmb();
         rx_tail++;
     }
@@ -298,6 +333,7 @@ uint32_t net_tx_commit(uint8_t *b, uint32_t sectors)
         return 0;
     }
     tx_len[tx_head % TX_SLOTS] = (uint16_t)len;
+    trace(tr1, &tr1_n, TR_TX_IN, f, len);
     __dmb();
     tx_head++;
     kick();
@@ -342,4 +378,27 @@ void net_bridge_console(void)               /* core0: 'w' */
     printf("  TX       : %lu frames sent, %lu busy (ring full), %lu refused, %lu for the Pico, "
            "%lu send errors\n", (unsigned long)st_tx, (unsigned long)st_tx_busy,
            (unsigned long)st_tx_bad, (unsigned long)st_tx_pico, (unsigned long)st_tx_err);
+}
+
+/* console W: the last frames of both rings, merged by time. Columns: time
+   since the first event (ms), gap to the previous one (ms), event, length,
+   TCP seq (to the Atari) or ack (from it), polls. */
+void net_bridge_trace(void)
+{
+    static const char *name[] = { "wifi->pico ", "pico->atari", "atari->pico", "pico->wifi " };
+    uint32_t n0 = tr0_n, n1 = tr1_n;
+    uint32_t i0 = n0 > TR_N ? n0 - TR_N : 0, i1 = n1 > TR_N ? n1 - TR_N : 0;
+    uint32_t t0 = 0, prev = 0;
+    bool first = true;
+    printf("frame timeline (last %d per side), polls so far %lu\n", TR_N, (unsigned long)st_rx_poll);
+    while (i0 < n0 || i1 < n1) {
+        const trace_t *a = i0 < n0 ? &tr0[i0 % TR_N] : NULL, *b = i1 < n1 ? &tr1[i1 % TR_N] : NULL;
+        const trace_t *e = !b || (a && (int32_t)(a->t - b->t) <= 0) ? a : b;
+        if (e == a) i0++; else i1++;
+        if (first) { t0 = prev = e->t; first = false; }
+        printf("%8.3f %+7.3f %s %4u", (e->t - t0) / 1000.0, (e->t - prev) / 1000.0, name[e->type], e->len);
+        if (e->flags) printf("  %s %08lx %02x", e->type <= TR_RX_OUT ? "seq" : "ack", (unsigned long)e->val, e->flags);
+        printf("\n");
+        prev = e->t;
+    }
 }

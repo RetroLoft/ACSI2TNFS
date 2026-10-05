@@ -28,10 +28,10 @@ typedef BASEPAGE BASPAG;                    /* Pure C name used by the headers *
 
 #define DRIVER_NAME   "ACSI_NET.STX"
 #define PORT_NAME     "ACSI2TNFS"
-#define VERSION       "00.04"
+#define VERSION       "00.06"
 #define MOD_DATE      (((2026 - 1980) << 9) | (10 << 5) | 4)
 
-#define MAX_FRAMES_PER_POLL 4               /* receive: frames per STinG call */
+#define MAX_FRAMES_PER_POLL 16              /* receive: frames per STinG call */
 #define MAX_SENDS_PER_POLL  4               /* send: datagrams per STinG call */
 #define ARP_RETRY_MS        1000L           /* ARP request again after 1 s     */
 
@@ -89,10 +89,24 @@ static uint32 st_tx_frames, st_tx_busy, st_tx_err, st_arp_req, st_arp_ans;
 
 /* ---------------- small helpers, no C library (-mshort) ---------------- */
 
+/* frames and datagrams are copied a lot: by longs when both addresses are
+   even (the 68000 needs no more alignment than that), 32 bytes per loop */
 void *memcpy(void *d, const void *s, unsigned long n)
 {
     char *dp = d;
     const char *sp = s;
+    if (!(((unsigned long)dp | (unsigned long)sp) & 1)) {
+        uint32 *dl = (uint32 *)dp;
+        const uint32 *sl = (const uint32 *)sp;
+        while (n >= 32) {
+            dl[0] = sl[0]; dl[1] = sl[1]; dl[2] = sl[2]; dl[3] = sl[3];
+            dl[4] = sl[4]; dl[5] = sl[5]; dl[6] = sl[6]; dl[7] = sl[7];
+            dl += 8; sl += 8; n -= 32;
+        }
+        while (n >= 4) { *dl++ = *sl++; n -= 4; }
+        dp = (char *)dl;
+        sp = (const char *)sl;
+    }
     while (n--) *dp++ = *sp++;
     return d;
 }

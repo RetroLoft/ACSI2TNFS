@@ -282,6 +282,7 @@ static void console(int ch)
     case 'i': info(); break;
     case 'n': net_console_status(); break;
     case 'w': net_bridge_console(); break;
+    case 'W': net_bridge_trace(); break;
     case 'N': printf("network test requested\n"); net_request_test(); break;
     case 'R':
         /* restore the system files without touching the user's files; the

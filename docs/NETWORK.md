@@ -136,8 +136,13 @@ Restart once more, or use *STinG Port Setup* to activate the port.
 
 ## Speed and limits
 
-- Measured with FTP over the local network: about **24 KB/s** into a network drive and
-  **11 KB/s** onto C: (C: is flash: every small write erases a 4 KB block).
+- Measured over the local network: about **57 KB/s** with STinG's own `TCP.STX` 1.35
+  and **69 KB/s** with the newer `TCP.STX` 1.41 by chzsoft
+  ([github.com/chzsoft/sting](https://github.com/chzsoft/sting)); just replace
+  `C:\STING\TCP.STX` with it. Recommended. The limit is how often STinG fetches the
+  frames (every 50 ms), not the adapter.
+- Saving is slower: with FTP about **24 KB/s** into a network drive and **11 KB/s**
+  onto C: (C: is flash: every small write erases a 4 KB block).
 - The Atari **cannot reach the Pico's own IP address** (the bridge drops such frames:
   they could not come back over Wi-Fi). Everything else on the network and the internet
   works.

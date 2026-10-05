@@ -116,3 +116,16 @@ Step by step, with example files and troubleshooting: [docs/NETWORK.md](docs/NET
   Christian Zietz (GPL-2+), and the frame bridge follows
   [PicoWifi](https://github.com/czietz/picowifi).
 - STinG by Peter Rottengatter and Ronald Andersson.
+
+## License
+
+Copyright (C) 2025-2026 Frank Beentjes.
+
+GNU General Public License, version 3 or (at your option) any later version: see
+[LICENSE](LICENSE).
+
+- `atari/sting/` (`ACSI_NET.STX`) contains code after USB_NET.STX and is GPL-2.0-or-later
+  (`atari/sting/LICENSE`); `atari/sting/include/` holds headers from the STinG developer kit.
+- The firmware is built with the Raspberry Pi Pico SDK (BSD-3-Clause), lwIP (BSD) and the
+  `cyw43-driver` for the Wi-Fi chip, which Raspberry Pi licenses for use with its own
+  microcontrollers only (`lib/cyw43-driver/LICENSE.RP` in the SDK).

@@ -9,7 +9,6 @@ What is on this disk?
   ACSITNFS.PRG configuration program (GEM): Wi-Fi, TNFS drives,
                clock and ACSI device ID
   ACSI_NET.STX STinG driver: internet on the Atari (see below)
-  URLVIEW.TTP  shows a web page, a screen at a time (see below)
 
 How does it work?
   - The Pico answers ACSI commands on its own device ID
@@ -68,8 +67,3 @@ Internet with STinG
   3. ROUTE.TAB: your network and a default route via your
      router through the port ACSI2TNFS.
   Step by step: docs/NETWORK.md, github.com/RetroLoft/ACSI2TNFS
-
-URLVIEW.TTP
-  Give it an address, e.g. info.cern.ch or host/path. It shows
-  the source a screen at a time: -Meer- waits for a key,
-  Control-C quits. http only, not https (no TLS on a 68000).

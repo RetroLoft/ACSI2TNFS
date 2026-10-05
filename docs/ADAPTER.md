@@ -56,8 +56,8 @@ must boot from floppy, or another hard disk driver). `ACSITNFS.PRG` still works.
 
 ## System files on C:
 
-`README.TXT`, `ACSITNFS.PRG`, `ACSI_NET.STX` and `URLVIEW.TTP` come with the firmware and
-are read-only. A new firmware updates them at start-up and keeps every other file on C:.
+`README.TXT`, `ACSITNFS.PRG` and `ACSI_NET.STX` come with the firmware and are
+read-only. A new firmware updates them at start-up and keeps every other file on C:.
 A system file that was deleted, or one that is new in the firmware, comes on C: with `R`.
 
 ## Troubleshooting

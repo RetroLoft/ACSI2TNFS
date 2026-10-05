@@ -4,7 +4,6 @@ CC = m68k-atari-mint-gcc
 CFLAGS = -m68000 -mshort -O2 -Wall -fomit-frame-pointer -fno-builtin -Iinclude
 OBJS = init.o acsi_net.o acsinet.o
 
-all: ACSI_NET.STX URLVIEW.TTP
 
 ACSI_NET.STX: $(OBJS)
 	$(CC) -mshort -nostdlib -o $@ $(OBJS) -lgcc -s
@@ -15,8 +14,5 @@ ACSI_NET.STX: $(OBJS)
 %.o: %.S
 	$(CC) $(CFLAGS) -c $< -o $@
 
-URLVIEW.TTP: start.o urlview.o
-	$(CC) -mshort -nostdlib -o $@ start.o urlview.o -lgcc -s
-
 clean:
-	rm -f ACSI_NET.STX URLVIEW.TTP $(OBJS) start.o urlview.o
+	rm -f ACSI_NET.STX $(OBJS)

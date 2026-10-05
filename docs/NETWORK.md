@@ -5,7 +5,7 @@ The adapter's Pico is on your Wi-Fi network. With the STinG TCP/IP stack and the
 pages and be reached from other computers.
 
 ```text
-program (PING, gapFTP, URLVIEW, ...)
+program (PING, gapFTP, CAB, ...)
   -> STinG (IP, TCP, UDP, DNS)
   -> ACSI_NET.STX (Ethernet frames, ARP)
   -> ACSI -> Pico -> Wi-Fi -> your router -> internet
@@ -130,27 +130,9 @@ Restart once more, or use *STinG Port Setup* to activate the port.
 - **Ping the router:** `PING.PRG`, host `192.168.178.1` (the default `127.0.0.1` is the
   Atari itself and does not use the network).
 - **Ping the Atari from a PC:** `ping 192.168.178.210`. STinG answers by itself.
-- **A web page:** `C:\URLVIEW.TTP`, see below.
+- **A web page:** URLVIEW from [Network tools for the Atari ST](https://github.com/RetroLoft/atari-net-tools).
 - **FTP:** e.g. [gapFTP](https://atariuptodate.de/en/905/gapftp) (17 KB, command line):
   `GAPFTP.TTP ftp.funet.fi`.
-
-## URLVIEW.TTP
-
-Shows the source of a web page, a screen at a time, like the desktop shows a text file.
-Nothing is written to disk.
-
-```text
-URLVIEW info.cern.ch
-URLVIEW http://192.168.1.10:8000/notes.txt
-URLVIEW -h example.com          (also show the HTTP headers)
-```
-
-- `http://` is optional; upper or lower case does not matter for it or the host name.
-- `-Meer-` at the bottom: any key shows the next screen. **Control-C** quits at once.
-- Without a parameter it asks for the address.
-- **http only, not https:** encryption (TLS) is not feasible on a 68000. Many sites
-  redirect to https; URLVIEW then shows the status line and the new address.
-- Characters outside ASCII (UTF-8, é, ü) show as `?`.
 
 ## Speed and limits
 

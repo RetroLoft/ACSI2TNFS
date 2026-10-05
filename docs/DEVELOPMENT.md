@@ -25,11 +25,11 @@ python mkdisk.py          # out/BOOT.BIN, DRV.BIN, disk.img, ../disk_seed.h
 
 | | |
 |---|---|
-| `atari/sting/` | `make`: `ACSI_NET.STX` (STinG driver) and `URLVIEW.TTP`; `-mshort`, no C library |
+| `atari/sting/` | `make`: `ACSI_NET.STX` (STinG driver); `-mshort`, no C library |
 | `atari/tools/` | `make`: `NETTEST.TTP`, the test tool for the network protocol |
 | `ACSITNFS.PRG` | [SideTNFS-Config](https://github.com/RetroLoft/SideTNFS-Config), branch `acsi-transport`, `make acsi` |
 
-Copy new builds of `ACSI_NET.STX`, `URLVIEW.TTP` and `ACSITNFS.PRG` into `atari/files/`:
+Copy new builds of `ACSI_NET.STX` and `ACSITNFS.PRG` into `atari/files/`:
 everything there becomes a read-only system file on C:.
 
 ## Repository layout
@@ -45,7 +45,7 @@ everything there becomes a read-only system file on C:.
 | `sysfiles.c` | keeps the system files on C: up to date |
 | `acsi.h`, `settings.h` | pin map, flash layout, shared types |
 | `atari/` | boot code, resident driver (68000 assembler), `mkdisk.py`, `files/` for C: |
-| `atari/sting/`, `atari/tools/` | STinG driver, URLVIEW, NETTEST |
+| `atari/sting/`, `atari/tools/` | STinG driver, NETTEST |
 | `hardware/` | KiCad projects: `v1`, `dev` (ribbon cable), `v2` (DB19 on the board) |
 
 ## ACSI vendor commands

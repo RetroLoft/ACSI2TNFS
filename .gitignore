@@ -16,6 +16,3 @@ atari/version.inc
 atari/tools/NETTEST.TTP
 atari/sting/*.o
 atari/sting/ACSI_NET.STX
-atari/sting/URLVIEW.TTP
-atari/sting/start.o
-atari/sting/urlview.o

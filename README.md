@@ -51,8 +51,8 @@ From then on the Atari boots with C:, the network drives and the right time.
 - **Drive letters** for network drives: D: to P: (TOS knows 16 drives).
 - **TOS 1.x with several drives:** put `FOLDR100.PRG` (from Atari's AHDI) in `C:\AUTO`,
   or TOS runs out of folder memory ("use FOLDR100.PRG").
-- **Read-only files on C:** `README.TXT`, `ACSITNFS.PRG`, `ACSI_NET.STX` and
-  `URLVIEW.TTP` come with the firmware. Your own files (DESKTOP.INF, an AUTO folder, …)
+- **Read-only files on C:** `README.TXT`, `ACSITNFS.PRG` and `ACSI_NET.STX` come with
+  the firmware. Your own files (DESKTOP.INF, an AUTO folder, …)
   stay when you update the firmware.
 
 More: [docs/ADAPTER.md](docs/ADAPTER.md) (USB console, ACSI id, hidden mode, C:,
@@ -92,8 +92,8 @@ driver `ACSI_NET.STX` on C: connects STinG to the adapter.
      Line 1: your own network, directly. Line 2: everything else via the router.
    - `C:\STING\DEFAULT.CFG`: `NAMESERVER  = 192.168.178.1` (your router).
 
-Test with `PING.PRG` (STinG tools) to your router, or show a web page with
-`C:\URLVIEW.TTP` (e.g. `info.cern.ch`; http only, not https).
+Test with `PING.PRG` (STinG tools) to your router. Small STinG programs, e.g. a web
+page viewer: [Network tools for the Atari ST](https://github.com/RetroLoft/atari-net-tools).
 
 Step by step, with example files and troubleshooting: [docs/NETWORK.md](docs/NETWORK.md).
 

@@ -703,6 +703,7 @@ static uint8_t exec_cmd(const uint8_t *cdb, uint8_t cdb_len, uint32_t *bytes)
             if (c[4] < 1) break;
             uint32_t n;
             uint8_t *b = net_rx_next(reply, c[4], &n);
+            if (b != reply) gpio_put(PIN_LED, 1);
             *bytes = n * 512u;
             if (!dma_out2(b, n * 512u, NULL, 0)) return 0x02;
             net_rx_sent(b);
@@ -752,7 +753,9 @@ static void __not_in_flash_func(handle_command)(uint32_t s0)
         if (n < len) irq_assert();
     }
 
-    gpio_put(PIN_LED, 1);
+    /* activity led; STinG polls NET_RX many times a second, so that one
+       lights it only when a frame goes to the Atari */
+    if (!((L.cdb[0] & 0x1f) == 0x11 && L.cdb[3] == 0x23)) gpio_put(PIN_LED, 1);
     acks = 0;
     ack_drain(NULL);
     ackcap_n = 0;

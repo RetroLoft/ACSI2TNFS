@@ -70,4 +70,5 @@ A system file that was deleted, or one that is new in the firmware, comes on C: 
 | "use FOLDR100.PRG" / folders do not open | TOS 1.x: `FOLDR100.PRG` in `C:\AUTO` |
 | Drive letter not as configured | Letters above P: are not possible; a taken letter gives the next free one |
 | Clock not set | Network clock on (`K`, ACSITNFS.PRG), Wi-Fi connected; ESC skips the wait at start-up |
-| Network drive empty or missing | Console `n`: server reachable? folder correct? |
+| Network drive shows only `NET_ERR.TXT` | The reason is in the file (Show). Fix it, then console `N` or restart |
+| Network drive empty | Still connecting at start-up, or console `n`: server reachable? folder correct? |

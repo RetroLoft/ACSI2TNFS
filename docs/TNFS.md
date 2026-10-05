@@ -45,6 +45,17 @@ stopped writing, the Pico compares the drive with the server and applies new, ch
 renamed and deleted files and folders. A large file can take a while to reach the
 server; reads and writes of the Atari go on in between.
 
+## When a drive cannot be used
+
+If there is no Wi-Fi, the server does not answer, its name cannot be found or it refuses
+the folder, the drive holds one read-only file, **`NET_ERR.TXT`**. Show it on the
+desktop: it gives the reason, the server and the folder. Once the server can be reached,
+press `N` on the USB console or restart the adapter: the drive then reads its folders
+and the Atari sees them right away.
+
+If the server forgets the adapter's session (tnfsd does that after 10 minutes without
+contact, and on a restart), the adapter logs in again by itself.
+
 ## What to keep in mind
 
 - **Files added on the server** are seen after the Pico re-reads the tree: at start-up,

@@ -71,8 +71,23 @@ def root_sector(boot, psize):
     return s
 
 
+def files_date():
+    """Date for the files on C:: the last commit that changed them or the
+    version, so the image (disk_seed.h) only changes when they do - not at
+    every build or branch switch. Without git: a fixed date."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    try:
+        out = subprocess.run(["git", "log", "-1", "--format=%ct", "--", "files", "../version.txt"],
+                             cwd=here, capture_output=True, text=True, timeout=10).stdout.strip()
+        if out:
+            return int(out)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        pass
+    return 1767225600                       # 2026-01-01 00:00 UTC
+
+
 def dos_datetime(t):
-    lt = time.localtime(t)
+    lt = time.gmtime(t)                     # UTC: the same image on every PC
     d = ((lt.tm_year - 1980) << 9) | (lt.tm_mon << 5) | lt.tm_mday
     tm = (lt.tm_hour << 11) | (lt.tm_min << 5) | (lt.tm_sec // 2)
     return tm, d
@@ -112,7 +127,7 @@ def fat16_partition(psize, files):
     fat = [0] * (ncl + 2)
     fat[0], fat[1] = (0xff8, 0xfff) if fat12 else (0xfff8, 0xffff)
     rootdir = bytearray(rdlen * bps)
-    tm, dt = dos_datetime(time.time())
+    tm, dt = dos_datetime(files_date())
     struct.pack_into("<11sB10xHHHI", rootdir, 0, b"ACSI2TNFS  ", 0x08, tm, dt, 0, 0)
     ent = 1
     nextcl = 2

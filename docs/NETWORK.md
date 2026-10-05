@@ -38,8 +38,20 @@ no DHCP, so you pick one yourself:
   `.20`–`.200` by default, so for `192.168.178.x` pick e.g. `192.168.178.210`.
 - Not the Pico's own address (the USB console shows it with `n`).
 
-The examples below use network `192.168.178.0/24`, router `192.168.178.1` and Atari
-`192.168.178.210`. Use your own values.
+### The four addresses you need
+
+| | What it is | Example | Where to find it |
+|---|---|---|---|
+| **Atari IP address** | the Atari's own address | `192.168.178.210` | you choose it (above) |
+| **Subnet mask** | which part of an address says "same network" | `255.255.255.0` | PC: `ipconfig` (Windows) or the network settings, *Subnet Mask* |
+| **Router** (gateway) | the way to the internet; also your name server | `192.168.178.1` | PC: `ipconfig`, *Default Gateway* |
+| **Network address** | the name of your whole network, not a device | `192.168.178.0` | your IP address with the last number set to `0` (with mask `255.255.255.0`) |
+
+Most home networks use mask `255.255.255.0`: all devices share the first three numbers
+(`192.168.178.`), only the last one differs. The network address is then those three
+numbers with `.0`: for `192.168.1.x` it is `192.168.1.0`, for `10.0.0.x` it is `10.0.0.0`.
+
+The examples below use these values. Use your own.
 
 ## 3. Install STinG
 
@@ -80,17 +92,28 @@ ACSI_NET.STX 00.04: port ACSI2TNFS installed
 When the port becomes active, the Pico switches its bridge on (USB console `w`:
 *bridge on*).
 
-**Routes.** `C:\STING\ROUTE.TAB` (fields separated by tabs; lines starting with `#` are
-comments):
+**Routes.** `C:\STING\ROUTE.TAB` is STinG's signpost: for every packet it looks up
+which way it has to go. Each line is *network, mask, port, gateway*, separated by tabs;
+lines starting with `#` are comments. Replace the example line from the archive
+(`... Modem 1 ...`) by these two:
 
 ```text
 192.168.178.0	255.255.255.0	ACSI2TNFS	0.0.0.0
 0.0.0.0		0.0.0.0		ACSI2TNFS	192.168.178.1
 ```
 
-The first line: your own network, directly. The second: everything else via the router.
+- **Line 1, your own network:** every address that starts with `192.168.178.` (your PC,
+  the router, a NAS) is sent **directly**; gateway `0.0.0.0` means "no stop in between".
+  Fill in your network address and subnet mask.
+- **Line 2, everything else** (the internet): network `0.0.0.0` with mask `0.0.0.0`
+  matches any address. It goes **via your router**: fill in the router's address as
+  the gateway.
 
-**Name server.** In `C:\STING\DEFAULT.CFG`:
+The order matters: STinG takes the first line that matches, so the general line comes
+last.
+
+**Name server.** The name server turns names like `info.cern.ch` into IP addresses
+(DNS). At home that is almost always your router. In `C:\STING\DEFAULT.CFG`:
 
 ```text
 NAMESERVER  = 192.168.178.1

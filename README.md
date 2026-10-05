@@ -81,8 +81,16 @@ driver `ACSI_NET.STX` on C: connects STinG to the adapter.
    and restart.
 4. *Desk → Control Panel → STinG Port Setup*: port **ACSI2TNFS**, a **free IP address**
    of your network, the subnet mask, **Active**, *Save*.
-5. `ROUTE.TAB`: your network and a default route via your router, both on `ACSI2TNFS`.
-   `DEFAULT.CFG`: `NAMESERVER =` your router.
+5. Tell STinG where packets go and who looks up names. With a home network
+   `192.168.178.x` and the router on `192.168.178.1` (use your own numbers; on a PC
+   `ipconfig` shows them as *Default Gateway* and *Subnet Mask*):
+   - `C:\STING\ROUTE.TAB`, instead of the example line (fields separated by tabs):
+     ```text
+     192.168.178.0	255.255.255.0	ACSI2TNFS	0.0.0.0
+     0.0.0.0		0.0.0.0		ACSI2TNFS	192.168.178.1
+     ```
+     Line 1: your own network, directly. Line 2: everything else via the router.
+   - `C:\STING\DEFAULT.CFG`: `NAMESERVER  = 192.168.178.1` (your router).
 
 Test with `PING.PRG` (STinG tools) to your router, or show a web page with
 `C:\URLVIEW.TTP` (e.g. `info.cern.ch`; http only, not https).

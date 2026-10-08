@@ -45,6 +45,9 @@ USB console of the Pico (any baud rate, it is USB):
   R = restore system files on C:                  F = rewrite C:
   i = info                n = network status      B = BOOTSEL
 
+BOOTSEL button on the Pico: short press = hide/show (like H). While
+hidden the Pico's led blinks slowly. Reset the Atari after pressing it.
+
 With a Pico W / Pico 2 W: set up Wi-Fi, the TNFS drives and the
 clock with ACSITNFS.PRG.
 

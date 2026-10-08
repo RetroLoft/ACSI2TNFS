@@ -54,6 +54,11 @@ With `H` the adapter ignores everything except its own configuration commands un
 switched on again. The Atari then boots as if there were no adapter (e.g. a game that
 must boot from floppy, or another hard disk driver). `ACSITNFS.PRG` still works.
 
+Without a PC: a short press on the Pico's **BOOTSEL** button switches hidden mode on or
+off. While the adapter is hidden, the Pico's own led blinks slowly (once Wi-Fi has
+started). The change counts from the next Atari reset: press the button, reset the
+Atari, and the game on the floppy starts by itself.
+
 ## System files on C:
 
 `README.TXT`, `ACSITNFS.PRG` and `ACSI_NET.STX` come with the firmware and are

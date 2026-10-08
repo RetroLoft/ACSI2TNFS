@@ -306,6 +306,7 @@ bool net_vwrite(uint32_t drive, uint32_t rel, uint32_t n, uint8_t *buf)
 #if !BOARD_HAS_WIFI
 
 bool net_link_up(void) { return false; }
+void net_led(bool on) { (void)on; }
 void net_init(void) { clk_state = g_set.rtc_enabled ? CLK_NONE : CLK_OFF; clock_restore(); }
 void net_poll(void) { test_req = false; }
 static void drives_from_settings(void) { }
@@ -332,6 +333,12 @@ static bool wifi_inited;
 bool net_link_up(void)
 {
     return wifi_inited && cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA) == CYW43_LINK_UP;
+}
+
+/* the Pico's own led hangs on the Wi-Fi chip: only once that has started */
+void net_led(bool on)
+{
+    if (wifi_inited) cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, on);
 }
 
 /* ---------------- Wi-Fi ---------------- */

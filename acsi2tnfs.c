@@ -17,6 +17,9 @@
 #include "hardware/flash.h"
 #include "hardware/watchdog.h"
 #include "hardware/clocks.h"
+#include "hardware/sync.h"
+#include "hardware/structs/ioqspi.h"
+#include "hardware/structs/sio.h"
 #include "acsi.h"
 #include "disk_seed.h"
 
@@ -264,18 +267,56 @@ static void info(void)
            gpio_get(PIN_RW), (unsigned long)((gpio_get_all() >> PIN_D0) & 0xff));
 }
 
+/* console H or the BOOTSEL button */
+static void toggle_hidden(void)
+{
+    g_cfg.hidden = !g_cfg.hidden;
+    cfg_save();
+    printf(g_cfg.hidden ? "-> HIDDEN: the Atari sees no device on id %u from its next boot, reset it now\n"
+                        : "-> VISIBLE again on id %u, reset the Atari to boot from it\n", g_cfg.acsi_id);
+}
+
+/* The BOOTSEL button pulls the flash chip select low; it can only be read
+   with that pin's output switched off for a moment (pico-examples
+   picoboard/button). No code may run from flash meanwhile: core1 is held
+   off through flash_safe_execute, interrupts are off here. */
+static void __no_inline_not_in_flash_func(bootsel_cb)(void *param)
+{
+    const uint CS_PIN_INDEX = 1;
+    hw_write_masked(&ioqspi_hw->io[CS_PIN_INDEX].ctrl,
+                    GPIO_OVERRIDE_LOW << IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_LSB,
+                    IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_BITS);
+    for (volatile int i = 0; i < 1000; ++i) ;
+#if PICO_RP2040
+    *(bool *)param = !(sio_hw->gpio_hi_in & (1u << CS_PIN_INDEX));
+#else
+    *(bool *)param = !(sio_hw->gpio_hi_in & SIO_GPIO_HI_IN_QSPI_CSN_BITS);
+#endif
+    hw_write_masked(&ioqspi_hw->io[CS_PIN_INDEX].ctrl,
+                    GPIO_OVERRIDE_NORMAL << IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_LSB,
+                    IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_BITS);
+}
+
+/* every 100 ms; a press counts once, after two readings in a row */
+static void bootsel_poll(uint32_t now)
+{
+    static uint32_t last;
+    static int down;
+    bool pressed = false;
+    if (now - last < 100000) return;
+    last = now;
+    if (flash_safe_execute(bootsel_cb, &pressed, 10) != PICO_OK) return;   /* core1 busy: next time */
+    if (!pressed) { down = 0; return; }
+    if (++down == 2) toggle_hidden();
+}
+
 static void console(int ch)
 {
     switch (ch) {
     case 's': g_cfg.mode = MODE_SNIFF;  cfg_save(); printf("-> SNIFF mode\n"); break;
     case 't': g_cfg.mode = MODE_TARGET; cfg_save(); printf("-> TARGET mode, id %u\n", g_cfg.acsi_id); break;
     case 'v': g_cfg.verbose = !g_cfg.verbose; cfg_save(); printf("verbose %s\n", g_cfg.verbose ? "on" : "off"); break;
-    case 'H':
-        g_cfg.hidden = !g_cfg.hidden;
-        cfg_save();
-        printf(g_cfg.hidden ? "-> HIDDEN: the Atari sees no device on id %u from its next boot, reset it now\n"
-                            : "-> VISIBLE again on id %u, reset the Atari to boot from it\n", g_cfg.acsi_id);
-        break;
+    case 'H': toggle_hidden(); break;
     case 'K':
         net_clock_toggle();
         break;
@@ -429,6 +470,12 @@ int main(void)
         if (!BOARD_HAS_WIFI && now - last_hb > 500000) {  /* W: led shared with core1 */
             last_hb = now;
             gpio_put(PIN_LED_PICO, g_cfg.mode == MODE_TARGET ? 1 : !gpio_get(PIN_LED_PICO));
+        }
+        bootsel_poll(now);
+        if (BOARD_HAS_WIFI) {               /* hidden: the Pico's own led blinks slowly */
+            static int led = -1;
+            int want = g_cfg.hidden && (now / 1000000) % 2;
+            if (want != led) { led = want; net_led(want); }
         }
     }
 }

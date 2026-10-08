@@ -143,6 +143,7 @@ void acsi_hw_init(void);
 /* network (net.c) - only functional on boards with Wi-Fi */
 void net_init(void);                                   /* core0, at start      */
 void net_poll(void);                                   /* core0, main loop     */
+void net_led(bool on);                                 /* core0: the Pico's own led (W) */
 void net_request_test(void);                           /* console N: reconnect */
 uint32_t net_status_text(char *p, uint32_t max);       /* console n            */
 uint32_t net_vdrives(void);                            /* TNFS partitions (fixed after start-up) */

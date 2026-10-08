@@ -43,6 +43,63 @@ Ze doen ertoe op het moment dat de Pico **niet** onze firmware draait: bij het a
 
 **Op de huidige print:** een 10 kΩ van GP6 (/OE, U1 pin 19) naar 3,3 V is de belangrijkste. R7 en R9 leeg laten.
 
+## Hardware: storing op de diskettedrive (8 oktober 2026)
+
+**Klacht:** met de dev-print aan de ST gaat de diskettedrive mis: een lege desktop, of bestandsnamen met vreemde tekens. Het gebeurt ook als de adapter hidden staat, en ook als de print helemaal uit staat (geen USB).
+
+**Waarom de diskette:** in de ST delen de diskettecontroller (WD1772) en de ACSI-poort dezelfde databus D0–D7 aan de DMA-chip. De interrupt van de ACSI-poort (/IRQ, pin 10) en die van de diskettecontroller komen samen op MFP GPIP5; daarmee ziet TOS dat een diskettebewerking klaar is. Wat deze lijnen belast, raakt dus ook de diskette. Hidden helpt niet: dat verandert alleen de firmware, de print blijft elektrisch op de bus. De firmware zet /IRQ alleen bij een commando aan het eigen ID (hidden: alleen $11) en reageert niet op diskettetoegang.
+
+**Hoofdverdachte (print uit):** R1 en R6, de pull-ups van 3k3 op /IRQ en /DRQ, gaan naar de +5V van de print zelf (VBUS van de Pico). Zonder USB is die rail 0 V, en trekken ze de lijnen omlaag in plaats van omhoog. Een lage /IRQ ziet TOS als "diskette klaar". Bovendien kan de ST via deze weerstanden een beetje stroom de print in duwen en de Pico en U1 half voeden.
+
+**Regels voor elke print:**
+- **/IRQ en /DRQ:** zonder voeding hoogohmig; met voeding alleen naar massa trekken tijdens ons eigen commando. Geen pull-ups naar de eigen 5V (of 3,3V) van de print.
+- **Datalijnen:** naar de ST toe altijd ingang (U1 richting ST → Pico) of hoogohmig (U1 uit). Alleen tijdens de leesdata en de statusbyte van ons eigen commando stuurt U1 de bus.
+- **U1:** /OE met een pull-up naar 3,3V, zodat hij uit staat zolang de Pico niet draait. Zonder voeding schakelt de LVC245 zijn uitgangen uit (partial power-down, I_off).
+
+**v2-schema (`hardware/v2`), gecontroleerd met de netlist:**
+
+| Onderdeel | In v2 | Oordeel |
+|---|---|---|
+| R1 (/IRQ) en R2 (/DRQ) naar +5V | NC, niet geplaatst | goed, niet plaatsen |
+| R5 10k, /OE van U1 (GP15) naar 3,3V | geplaatst | goed |
+| U3 74LS07 op +5V | open collector op /IRQ en /DRQ; zonder voeding hoogohmig | goed |
+| R6/R7 10k naar 3,3V op de LS07-ingangen | geplaatst | nodig: bij v2 betekent een lage GPIO "aan" |
+| U1/U2 74LVC245 op 3,3V | zonder voeding uitgangen uit | goed |
+| U2 | /OE aan GND, DIR hoog: alleen ST → Pico | goed |
+| DIR van U1 (GP14) | geen pull | niet nodig, R5 houdt U1 uit |
+
+Open punt: v2 rekent erop dat de ST zelf pull-ups heeft op /IRQ en /DRQ. Dat bevestigt de meting hieronder.
+
+**Plan voor de dev-print:**
+1. **10k van GP6 (U1 pin 19, /OE) naar 3,3V.** Let op: niet op de pads van R8 zelf, die gaan naar GND (pull-down).
+2. **Meten op de ST, print los, ST aan,** ten opzichte van GND:
+   - pin 10 (/IRQ) en pin 19 (/DRQ): verwacht ongeveer 5 V (pull-ups in de ST);
+   - een paar datalijnen (pin 1–8): mogen zweven.
+3. Geven pin 10 en 19 ongeveer 5 V: **R1 en R6 (3k3) eraf halen.** Zweven ze of zijn ze laag, dan zijn pull-ups wel nodig, maar niet naar de 5V van de print; dan opnieuw bekijken.
+4. Ter controle met de print aangesloten en zonder USB: pin 10 en 19 weer meten, en Pico pin 36 (3V3) moet 0 V zijn (geen terugvoeding).
+5. Diskettetest: print los / aangesloten zonder USB / aan / aan en hidden. Voor "aan" ook met een losse USB-lader in plaats van de laptop (massastoring).
+6. Stoort hij aan en hidden nog steeds, dan zit de oorzaak ergens anders (massa via USB, bus of kabellengte). Dan kijkt de Pico-console mee (verbose) tijdens een diskettetest.
+7. Optioneel: het ST-schema erbij voor de pull-ups op HDINT/HDRQ en GPIP5.
+
+**v1-print testen (met de 74LS07):** v1 heeft al de open-collector LS07 die v2 ook gebruikt, en is dus een goede proef voor de v2-aanpak. Netlist van `hardware/v1`, verschillen met de dev-print en v2:
+
+| | dev-print (huidige firmware) | v1 | v2 |
+|---|---|---|---|
+| D0..D7 | GP8..GP15 | GP6..GP13 | GP13..GP6 (omgekeerd) |
+| DIR / /OE van U1 | GP7 / GP6 | GP14 / GP15 | GP14 / GP15 |
+| /CS, /RESET, /ACK, A1, R/W | GP16..GP20 | gelijk | gelijk |
+| /IRQ, /DRQ (GP21/22) | BC547: hoog = aan | LS07: **laag = aan** | LS07: laag = aan |
+| pull-up op /OE | geen (R8 is pull-down) | **geen** | R5 10k |
+| pull-ups op LS07-ingangen | n.v.t. | **geen** | R6/R7 10k |
+| R1/R2 pull-ups 3k3 naar eigen +5V | R1/R6 geplaatst | **geplaatst** | NC |
+
+Nodig voor de test:
+1. **Firmware met een bordinstelling** (stond al op de lijst): pinmap en polariteit van /IRQ en /DRQ per print. Let op: op v1 en v2 liggen de datalijnen en de stuurlijnen niet aaneengesloten (GP14/15 ertussen), en op v2 is de databus omgekeerd. Dat vraagt aanpassingen in de PIO-programma's (bijvoorbeeld 15 bits samplen; omkeren kan in PIO met `mov` en `::`).
+2. **10k pull-ups naar 3,3V op GP21 en GP22** (LS07-ingangen). Zonder die weerstanden zet de interne pull-down van de Pico in reset of BOOTSEL de LS07-ingangen laag, en trekt de LS07 /IRQ en /DRQ laag zolang de print voeding heeft. Dat stoort de diskette ook.
+3. **10k van GP15 (/OE, U1 pin 19) naar 3,3V**, net als R5 op v2.
+4. **R1 en R2 (3k3) eraf**, als de meting op de ST (stap 2 hierboven) ongeveer 5 V geeft.
+5. Dan dezelfde tests als op de dev-print: diskette met de print los / uit / aan / hidden, schijf en netwerk, en de /DRQ-loslaattijd (in de log `acks=512` in plaats van 514).
+
 ## ACSI_NET fase 1: testverslag (4 oktober 2026)
 
 Ontwerp: `ACSI_NET-ontwerp.md`. Getest op de ST (TOS 1.04) met `NETTEST.TTP` van een TNFS-drive (log in `NETTEST.LOG`) en de Pico-log, adapter op ACSI-ID 6.

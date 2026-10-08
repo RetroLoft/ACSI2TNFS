@@ -28,7 +28,7 @@ typedef BASEPAGE BASPAG;                    /* Pure C name used by the headers *
 
 #define DRIVER_NAME   "ACSI_NET.STX"
 #define PORT_NAME     "ACSI2TNFS"
-#define VERSION       "00.06"
+#define VERSION       "00.07"
 #define MOD_DATE      (((2026 - 1980) << 9) | (10 << 5) | 4)
 
 #define MAX_FRAMES_PER_POLL 16              /* receive: frames per STinG call */

@@ -5,9 +5,11 @@
  * or through Supexec.
  *
  * The DMA chip is shared with the floppy and every hard disk driver. Its
- * owner holds flock ($43e). We take it with TAS; when the STinG thread
- * finds it taken (a disk command is in progress underneath us) we do
- * nothing this time, as EtherNEA does.
+ * owner holds flock ($43e). We take it only when the whole word is 0, with
+ * interrupts off: TOS may set it to any non-zero value, and a TAS on the
+ * high byte would miss 1. When the STinG thread finds it taken (a disk
+ * command is in progress underneath us) we do nothing this time, as
+ * EtherNEA does.
  */
 #include "acsinet.h"
 
@@ -26,8 +28,14 @@ static int take_flock(int wait)
 {
     unsigned long until = HZ200 + 200;          /* 1 s */
     for (;;) {
-        char got;
-        __asm__ volatile ("tas 0x43e.w\n\tseq %0" : "=d"(got) : : "cc", "memory");
+        unsigned short sr;
+        int got = 0;
+        __asm__ volatile ("move.w %%sr,%0\n\tori.w #0x700,%%sr" : "=d"(sr) : : "cc", "memory");
+        if (*FLOCK == 0) {
+            *FLOCK = -1;
+            got = 1;
+        }
+        __asm__ volatile ("move.w %0,%%sr" : : "d"(sr) : "cc", "memory");
         if (got) return 1;
         if (!wait || HZ200 > until) return 0;
     }

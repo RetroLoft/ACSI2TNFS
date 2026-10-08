@@ -81,6 +81,10 @@ Open punt: v2 rekent erop dat de ST zelf pull-ups heeft op /IRQ en /DRQ. Dat bev
 6. Stoort hij aan en hidden nog steeds, dan zit de oorzaak ergens anders (massa via USB, bus of kabellengte). Dan kijkt de Pico-console mee (verbose) tijdens een diskettetest.
 7. Optioneel: het ST-schema erbij voor de pull-ups op HDINT/HDRQ en GPIP5.
 
+**Uitkomst (8 oktober 2026):** de storing met de print **aan** kwam niet van de hardware maar van ACSI_NET.STX. Zonder STinG (STING.PRG hernoemd) werkte de diskette goed, en met hidden bij het opstarten ook (dan laadt er niets van C:). De Pico-log liet afgebroken NET_RX-commando's zien (`acks=28`, `TIMEOUT`, `PROTOCOL`): de STX nam de DMA-chip over midden in een diskettebewerking. De STX nam flock met `TAS`, en dat test alleen de hoogste bit van het woord. STX 00.07 neemt flock alleen als het hele woord 0 is, met de interrupts uit. Getest: diskette werkt met STinG aan, geen TIMEOUT/PROTOCOL meer, en `URLVIEW -o B:` (300.000 bytes van de laptop naar RadioFloppy op B:, tegelijk diskette en netwerk) gaf een identiek bestand (MD5). Traag, omdat de STX netjes wacht zolang TOS de diskette gebruikt.
+
+De storing met de print **uit** kwam wel van de hardware: R1 en R6 (3k3 naar de eigen 5V) zijn eraf, en daarmee is die weg.
+
 **v1-print testen (met de 74LS07):** v1 heeft al de open-collector LS07 die v2 ook gebruikt, en is dus een goede proef voor de v2-aanpak. Netlist van `hardware/v1`, verschillen met de dev-print en v2:
 
 | | dev-print (huidige firmware) | v1 | v2 |

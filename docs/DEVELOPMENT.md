@@ -46,7 +46,7 @@ everything there becomes a read-only system file on C:.
 | `acsi.h`, `settings.h` | pin map, flash layout, shared types |
 | `atari/` | boot code, resident driver (68000 assembler), `mkdisk.py`, `files/` for C: |
 | `atari/sting/`, `atari/tools/` | STinG driver, NETTEST |
-| `hardware/` | KiCad projects: `v1`, `dev` (ribbon cable), `v2` (DB19 on the board) |
+| `hardware/` | KiCad projects: `v2` (DB19 on the board), `v2-cable` (flat cable, pass-through); see its README |
 
 ## ACSI vendor commands
 
@@ -84,11 +84,12 @@ design of the network function, with the reasoning and the test reports, is in
 
 ## Hardware notes
 
-- `/OE` of the data bus buffer needs a pull-up to 3.3 V, so the buffer is off while the
-  Pico is in reset or BOOTSEL; on the `dev` board R8 is a pull-down (see
-  `project-notities.md`).
-- The `dev` board drives /DRQ through a BC547 that releases about 1 µs late; the firmware
-  copes with it, `v2` uses a 74LS07.
+- The design rules for the boards (no pull-ups on /IRQ and /DRQ, pull-up on /OE, pull-ups
+  on the 74LS07 inputs) are in [hardware/README.md](../hardware/README.md).
+- The firmware still uses the pin map of the earlier development board (no longer in the
+  repo: data on GP8-GP15, /OE GP6, DIR GP7, /IRQ and /DRQ through BC547s, high = active).
+  Its BC547 releases /DRQ about 1 µs late; the firmware copes with it, `v2` and `v2-cable`
+  use a 74LS07.
 - Reads hold each byte about 130 ns after /ACK rises; with less the DMA chip now and then
   latched the next byte.
 

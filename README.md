@@ -20,8 +20,9 @@ program, **ACSITNFS.PRG**, sets up Wi-Fi, network drives, clock and the ACSI id.
 
 ## What you need
 
-- The ACSI2TNFS board with a **Raspberry Pi Pico 2 W** (`hardware/`: `v2` plugs straight
-  into the Atari, `dev` connects with a ribbon cable and has a pass-through connector).
+- The ACSI2TNFS board with a **Raspberry Pi Pico 2 W**: `v2` plugs straight into the
+  Atari, `v2-cable` connects with a flat cable to a Lotharek DB19 adapter and has a
+  pass-through connector. See [hardware/README.md](hardware/README.md).
 - An Atari with an ACSI port and **TOS 1.02 or later**, or EmuTOS. TOS 1.0 does not
   see the adapter.
 - A 2.4 GHz Wi-Fi network.

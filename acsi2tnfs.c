@@ -370,7 +370,7 @@ static void console(int ch)
         break;
     }
     case 'x': {
-        static const uint32_t secs[] = { 17, 23, 29, 51, 52 };
+        static const uint32_t secs[] = { 17, 34, 51, 67, 68 };  /* FAT 1, FAT 2, root, data */
         for (int k = 0; k < 5; k++) {
             const uint8_t *p = (const uint8_t *)(XIP_BASE + DISK_FLASH_OFFSET + secs[k] * 512u);
             printf("== sector %lu", (unsigned long)secs[k]);

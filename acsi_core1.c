@@ -23,11 +23,11 @@
 
 #define FW_VERSION FW_VERSION_STR
 
-/* disk size: flash disk, then one virtual partition per TNFS drive */
+/* disk size: C:, then one virtual partition per TNFS drive */
 static uint32_t total_sectors(void)
 {
     uint32_t nv = net_vdrives();
-    return nv ? VFAT_START + (nv - 1) * VFAT_STRIDE + VFAT_SECTORS : DISK_SECTORS;
+    return nv ? VFAT_START + (nv - 1) * VFAT_STRIDE + VFAT_SECTORS : VFAT_START;
 }
 #define TOTAL_SECTORS total_sectors()
 

@@ -48,12 +48,14 @@
      0x1FF000 .. 0x1FFFFF  settings
 --------------------------------------------------------------------------- */
 #define DISK_FLASH_OFFSET   0x100000u
-#define DISK_SECTORS        2040u
+#define DISK_SECTORS        2040u   /* in flash; the C: partition is larger,
+                                       the rest is marked bad (atari/mkdisk.py) */
 #define CFG_FLASH_OFFSET    0x1FF000u
 
 /* Virtual FAT16 partition backed by the TNFS server (Wi-Fi boards only).
-   16 MB: TOS 1.x Rwabs sector numbers are signed 16-bit (512-byte sectors). */
-#define VFAT_START          4096u
+   16 MB: TOS 1.x Rwabs sector numbers are signed 16-bit (512-byte sectors).
+   Also the disk size without TNFS drives: C: ends before it. */
+#define VFAT_START          8192u
 #define VFAT_SECTORS        32760u
 /* One partition per TNFS drive, every VFAT_STRIDE sectors from VFAT_START.
    The root sector has 4 entries: C: plus up to 3 TNFS drives. */

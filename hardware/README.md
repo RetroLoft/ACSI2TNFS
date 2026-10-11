@@ -54,6 +54,12 @@ easiest way.
 | | | 19 | /DRQ |
 | | | 20 | not used |
 
+### No Lotharek adapter? Make one
+
+`acsi-adapter` is the same adapter as a KiCad project: the DB19 of `v2` (the same special
+pins) wired 1:1 to the IDC20 box header of `v2-cable`, pin 20 not connected. The box
+header sits on the side of the wide DB19 row, like on Lotharek's adapter.
+
 ## Both boards
 
 - **Raspberry Pi Pico 2 W** on pin headers. The Pico powers the

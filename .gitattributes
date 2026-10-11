@@ -1,0 +1,2 @@
+# files on C: are built into disk_seed.h: same bytes on every platform
+atari/files/*.TXT text eol=crlf

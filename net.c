@@ -329,6 +329,8 @@ uint32_t net_status_text(char *p, uint32_t max)
 #include "lwip/netif.h"
 
 static bool wifi_inited;
+static void net_sleep_ms(uint32_t ms);
+static void vreq_service(void);
 
 bool net_link_up(void)
 {
@@ -404,7 +406,7 @@ static bool wifi_connect(void)
             else if (st == CYW43_LINK_FAIL) err = "connection failed";
             else if (time_reached(until)) err = "timeout";
             if (err) break;
-            sleep_ms(50);
+            net_sleep_ms(50);
         }
         if (!err) break;
         printf("net: [%lu ms] Wi-Fi try %d: %s\n", (unsigned long)(time_us_64() / 1000), attempt, err);
@@ -414,7 +416,7 @@ static bool wifi_connect(void)
             return false;
         }
         cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);
-        sleep_ms(250);                  /* the first join after power-up often fails */
+        net_sleep_ms(250);              /* the first join after power-up often fails */
     }
     const ip4_addr_t *ip = netif_ip4_addr(netif_default);
     snprintf(wifi_status, sizeof wifi_status, "connected, IP %s", ip4addr_ntoa(ip));
@@ -461,7 +463,8 @@ typedef struct {
     uint32_t last_wr_ms;
     char     status[96];
     /* not available (no Wi-Fi, no server, mount refused): the drive shows
-       one read-only file NET_ERR.TXT with this text, as SideTNFS does */
+       one read-only file NET_ERR.TXT with this text, as SideTNFS does;
+       not ready yet (still connecting): NET_WAIT.TXT */
     bool     failed;
     uint16_t errlen;
     char     errtxt[400];
@@ -471,6 +474,22 @@ typedef struct {
 static vdrive_t vd[VDRIVES_MAX];
 static int      nvd;
 static vdrive_t *cur;
+
+/* drive d is not ready yet: NET_WAIT.TXT tells why it is empty */
+static void vdrive_wait(vdrive_t *d)
+{
+    int n = snprintf(d->errtxt, sizeof d->errtxt,
+                     "ACSI2TNFS: network drive not ready yet\r\n"
+                     "\r\n"
+                     "Server : %s:%u\r\n"
+                     "Folder : %s\r\n"
+                     "\r\n"
+                     "The adapter is still connecting to Wi-Fi and the\r\n"
+                     "TNFS server. Close this window and open the drive\r\n"
+                     "again in a moment.\r\n",
+                     d->server, d->port, d->path);
+    d->errlen = (uint16_t)(n < 0 ? 0 : n < (int)sizeof d->errtxt ? n : (int)sizeof d->errtxt - 1);
+}
 
 static void drives_from_settings(void)
 {
@@ -488,6 +507,7 @@ static void drives_from_settings(void)
         d->prefer_tcp = s->transport == DRV_TCP;
         d->vf_node = -1;
         snprintf(d->status, sizeof d->status, "not connected yet");
+        vdrive_wait(d);
     }
 }
 
@@ -581,7 +601,7 @@ static bool tcp_open(vdrive_t *d)
     /* the first SYN can be lost while ARP resolves the server; lwIP only
        retransmits after 3 s, so allow for that */
     absolute_time_t until = make_timeout_time_ms(10000);
-    while (d->tpcb && !d->tcp_up && !d->tcp_dead && !time_reached(until)) sleep_ms(5);
+    while (d->tpcb && !d->tcp_up && !d->tcp_dead && !time_reached(until)) net_sleep_ms(5);
     if (d->tcp_up) return true;
     printf("net: TCP connect to %s:%u failed (connect %d, error %d, %s)\n",
            ipaddr_ntoa(&d->ip), d->port, ce, d->tcp_last_err,
@@ -652,7 +672,7 @@ static int tnfs_req1(uint8_t cmd, const void *data, int dlen)
             }
             if (!d->use_tcp && rx_len) rx_len = 0;  /* stale UDP reply */
             if (d->use_tcp && d->tcp_dead) return -1;
-            sleep_ms(2);
+            net_sleep_ms(2);
         }
     }
     return -1;
@@ -712,7 +732,7 @@ static bool resolve_host(const char *host, ip_addr_t *ip)
     if (e == ERR_OK) { *ip = dns_ip; return true; }     /* cached */
     if (e == ERR_INPROGRESS) {
         absolute_time_t until = make_timeout_time_ms(5000);
-        while (!dns_state && !time_reached(until)) sleep_ms(10);
+        while (!dns_state && !time_reached(until)) net_sleep_ms(10);
         if (dns_state == 1) { *ip = dns_ip; return true; }
     }
     return false;
@@ -776,7 +796,7 @@ static bool ntp_sync(void)
         }
         cyw43_arch_lwip_end();
         absolute_time_t until = make_timeout_time_ms(2000);
-        while (!ntp_rx_unix && !time_reached(until)) sleep_ms(5);
+        while (!ntp_rx_unix && !time_reached(until)) net_sleep_ms(5);
         if (ntp_rx_unix) {
             clock_set(ntp_rx_unix);
             printf("net: [%lu ms] NTP time from %s\n", (unsigned long)(time_us_64() / 1000), g_set.ntp_server);
@@ -1003,6 +1023,9 @@ static void vscan_dir(uint16_t d)
     if (n < 6 || rx[4] != 0) return;
     uint8_t h = rx[5];
     for (;;) {
+        /* no request in flight here: serve the Atari, also for the drives
+           that are ready already (a large tree takes many seconds) */
+        vreq_service();
         n = tnfs_req(0x11, &h, 1);                          /* READDIR */
         if (n < 6 || rx[4] != 0) break;
         rx[n < (int)sizeof rx ? n : (int)sizeof rx - 1] = 0;
@@ -1358,8 +1381,7 @@ static bool vfat_sector(uint32_t rel, uint8_t *buf)
     vdrive_t *d = cur;
     memset(buf, 0, 512);
     if (rel == 0) { vfat_bootsector(buf); return true; }
-    if (!d->ready) {                                        /* NET_ERR.TXT or empty */
-        if (!d->failed) return true;
+    if (!d->ready) {                                        /* NET_ERR.TXT or NET_WAIT.TXT */
         if (rel < 1 + 2 * V_SPF) {
             if ((rel - 1) % V_SPF == 0) {                   /* clusters 0, 1 and 2 */
                 put16(buf, 0xfff8);
@@ -1367,7 +1389,7 @@ static bool vfat_sector(uint32_t rel, uint8_t *buf)
                 put16(buf + 4, 0xffff);
             }
         } else if (rel == 1 + 2 * V_SPF) {                  /* first root sector */
-            vdirent(buf, "NET_ERR TXT", 0x01, 0, 2, d->errlen);
+            vdirent(buf, d->failed ? "NET_ERR TXT" : "NET_WAITTXT", 0x01, 0, 2, d->errlen);
         } else if (rel == V_DATREC) {                       /* cluster 2 */
             memcpy(buf, d->errtxt, d->errlen);
         }
@@ -1433,6 +1455,20 @@ static void vreq_service(void)
     cur = save;
     __dmb();
     vreq_state = ok ? 2 : 3;
+}
+
+/* core0 waits for the network (Wi-Fi, DNS, NTP, a TNFS reply): meanwhile
+   answer the Atari for the TNFS drives that are not ready yet. They show
+   NET_WAIT.TXT or NET_ERR.TXT and need no network. HDDRIVER does not wait
+   for us at boot as our driver does, and would time out on them. */
+static void net_sleep_ms(uint32_t ms)
+{
+    absolute_time_t until = make_timeout_time_ms(ms);
+    do {
+        if (vreq_state == 1 && (vreq_drive >= (uint32_t)nvd || !vd[vreq_drive].ready))
+            vreq_service();
+        sleep_ms(1);
+    } while (!time_reached(until));
 }
 
 /* sectors written since the last sync, as taken over by the running sync;
@@ -1713,7 +1749,7 @@ static void tnfs_connect_and_scan(void)
     valloc_n = 0;
     vpool[0] = 0;
     vpool_len = 1;
-    for (int i = 0; i < nvd; i++) vd[i].failed = false;
+    for (int i = 0; i < nvd; i++) { vd[i].failed = false; vdrive_wait(&vd[i]); }
     if (!wifi_connect()) {
         if (g_set.rtc_enabled && clk_state != CLK_VALID) clk_state = CLK_NONE;
         char why[120];
@@ -1731,6 +1767,7 @@ static void tnfs_connect_and_scan(void)
     }
     if (!nvd) { printf("net: no TNFS drive configured\n"); return; }
     for (int i = 0; i < nvd; i++) {
+        vreq_service();
         vdrive_t *d = cur = &vd[i];
         d->dir[0] = 0;
         printf("net: TNFS %d: %s:%u %s\n", i + 1, d->server, d->port, d->path);

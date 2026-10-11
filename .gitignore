@@ -4,6 +4,7 @@ atari/out/
 
 # KiCad temporary / cache files
 *.lck
+*.kicad_prl
 fp-info-cache
 fp-*.tmp
 _autosave-*

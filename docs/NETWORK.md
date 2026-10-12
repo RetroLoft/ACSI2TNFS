@@ -15,18 +15,14 @@ The disk functions keep working at the same time: C: and the network drives.
 
 ## 1. What you need
 
-| | Where |
-|---|---|
-| STinG 1.26 | [sting126.lzh](https://chebucto.ns.ca/Services/PDA/sting126.lzh) from the [Chebucto Atari page](https://chebucto.ns.ca/Services/PDA/AtariSTComm.shtml) |
-| XControl 1.31 | [xctl131.zip](https://chebucto.ns.ca/Services/PDA/xctl131.zip) (same page) |
-| `ACSI_NET.STX` | on drive C: of the adapter (read-only system file) |
-| Firmware with the network function | 0.4.0 or later from the `acsi-net` branch |
+- Firmware with the network function (0.4.0 or later) and Wi-Fi set up (`ACSITNFS.PRG`).
+- `STINGINS.TOS` on drive C: of the adapter. It carries everything else: STinG 1.26
+  (Peter Rottengatter and Ronald Andersson, freeware), `TCP.STX` 1.41 by Christian Zietz
+  ([chzsoft/sting](https://github.com/chzsoft/sting)), `UDP.STX`, `RESOLVE.STX`,
+  `PING.PRG` and the adapter's `ACSI_NET.STX`.
 
-`.lzh` archives can be unpacked on the Atari with LHarc, or on a PC with 7-Zip.
-
-Older firmware: `ACSI_NET.STX` says *firmware without network function, not installed*
-at start-up. After a firmware update the new files may be missing on C:: press `R` on
-the USB console (see [ADAPTER.md](ADAPTER.md)).
+After a firmware update `STINGINS.TOS` may be missing on C:: press `R` on the USB console
+(see [ADAPTER.md](ADAPTER.md)).
 
 ## 2. Choose an IP address for the Atari
 
@@ -55,75 +51,82 @@ The examples below use these values. Use your own.
 
 ## 3. Install STinG
 
-From the STinG archive:
+Start `STINGINS.TOS` from the adapter's drive C: (under HDDRIVER the adapter's partition
+has another letter, e.g. `K:`). It shows the adapter's own Wi-Fi address and asks:
 
-| File | Goes to |
+| Question | Default |
 |---|---|
-| `AUTO\STING.PRG`, `AUTO\STING.INF` | `C:\AUTO` |
-| `STING\TCP.STX`, `UDP.STX`, `RESOLVE.STX`, `DEFAULT.CFG`, `ROUTE.TAB`, `CACHE.DNS` | a folder `C:\STING` |
-| `C:\ACSI_NET.STX` (from the adapter) | `C:\STING` as well |
-| `TOOLS\PING.PRG`, `PING.RSC` | anywhere, e.g. `C:\STING\TOOLS` |
+| Install on drive | the boot drive |
+| Atari IP address | the one already set, else your network with `.50` |
+| Subnet mask, gateway (router) | the adapter's |
+| DNS server | the gateway (almost always the router) |
 
-`STING.INF` contains the path of the STING folder (`C:\STING\`). The folder may also be
-on a network drive (e.g. `F:\STING\`): the adapter's drives are there before the AUTO
-folder runs. Leave out `SERIAL.STX` unless you use a modem.
+It writes:
 
-## 4. Install XControl
+| File | |
+|---|---|
+| `AUTO\STING.PRG`, `AUTO\STING.INF` | STinG, and where its folder is (`C:\STING\`) |
+| `STING\ACSI_NET.STX`, `TCP.STX`, `UDP.STX`, `RESOLVE.STX` | the modules |
+| `STING\TOOLS\PING.PRG`, `PING.RSC` | to try it |
+| `STING\DEFAULT.CFG` | STinG's settings, with `ACSI_IP`, `ACSI_MASK` and `NAMESERVER` |
+| `STING\ROUTE.TAB` | the routes: your network directly, everything else via the router |
 
-- `XCONTROL.ACC` in the **root** of C: (accessories load from there only).
-- The CPX modules in `C:\CPX`: from XControl at least `CONFIG.CPX`, from STinG
-  `STING.CPX`, `STNGPORT.CPX` and `STNGPROT.CPX`.
-
-Restart. At start-up STinG loads its modules; you should see
+Restart. At start-up you should see
 
 ```text
-ACSI_NET.STX 00.04: port ACSI2TNFS installed
+ACSI_NET.STX 00.08: port ACSI2TNFS installed
+ACSI_NET.STX: IP 192.168.178.210, mask 255.255.255.0, port active
 ```
 
-## 5. Configure
+When the port is active, the Pico switches its bridge on (USB console `w`: *bridge on*).
+If the Atari starts at the same moment as the adapter, `ACSI_NET.STX` first waits up to
+30 seconds for the adapter's Wi-Fi (a key skips that).
 
-**Port.** *Desk → Control Panel → STinG Port Setup*:
+**Again, to change the settings:** start `STINGINS.TOS` once more. It finds the
+installation through `AUTO\STING.INF` and offers *1 = change the network settings only*
+or *2 = install everything again*. Either way `DEFAULT.CFG` and `ROUTE.TAB` are updated,
+not replaced: other STinG settings and the routes of other ports stay.
 
-- port **ACSI2TNFS**
-- IP address: your free address (`192.168.178.210`)
-- subnet mask: `255.255.255.0`
-- **Active** ticked, *Save*
+## 4. What the installer writes, in detail
 
-When the port becomes active, the Pico switches its bridge on (USB console `w`:
-*bridge on*).
+**DEFAULT.CFG.** `ACSI_NET.STX` (00.08 and later) reads its address from
 
-**Routes.** `C:\STING\ROUTE.TAB` is STinG's signpost: for every packet it looks up
-which way it has to go. Each line is *network, mask, port, gateway*, separated by tabs;
-lines starting with `#` are comments. Replace the example line from the archive
-(`... Modem 1 ...`) by these two:
+```text
+ACSI_IP     = 192.168.178.210
+ACSI_MASK   = 255.255.255.0
+```
+
+and switches its port on with it, so the STinG Port Setup CPX in XControl is not needed.
+Without these lines the port gets its address from XControl, as with older versions.
+`NAMESERVER` is the name server, which turns names like `info.cern.ch` into IP addresses.
+`THREADING` (milliseconds) is how often STinG polls the adapter; 50 is STinG's default,
+smaller values react quicker and cost more CPU.
+
+STinG 1.26 reads `DEFAULT.CFG` correctly only with CR LF line ends: with LF only it skips
+the line after every setting. The installer always writes CR LF. Editing the file on a PC,
+keep the CR LF line ends.
+
+**ROUTE.TAB** is STinG's signpost: for every packet it looks up which way it has to go.
+Each line is *network, mask, port, gateway*, separated by tabs; lines starting with `#`
+are comments:
 
 ```text
 192.168.178.0	255.255.255.0	ACSI2TNFS	0.0.0.0
 0.0.0.0		0.0.0.0		ACSI2TNFS	192.168.178.1
 ```
 
-- **Line 1, your own network:** every address that starts with `192.168.178.` (your PC,
-  the router, a NAS) is sent **directly**; gateway `0.0.0.0` means "no stop in between".
-  Fill in your network address and subnet mask.
+- **Line 1, your own network:** every address that starts with `192.168.178.` is sent
+  **directly**; gateway `0.0.0.0` means "no stop in between".
 - **Line 2, everything else** (the internet): network `0.0.0.0` with mask `0.0.0.0`
-  matches any address. It goes **via your router**: fill in the router's address as
-  the gateway.
+  matches any address. It goes **via your router**.
 
-The order matters: STinG takes the first line that matches, so the general line comes
-last.
+STinG takes the first line that matches, so the general line comes last.
 
-**Name server.** The name server turns names like `info.cern.ch` into IP addresses
-(DNS). At home that is almost always your router. In `C:\STING\DEFAULT.CFG`:
+## 5. XControl (optional)
 
-```text
-NAMESERVER  = 192.168.178.1
-THREADING   = 50
-```
-
-`THREADING` is in milliseconds: how often STinG polls the adapter. 50 is STinG's default
-and costs about 1.5 % of the CPU; smaller values give a quicker response and cost more.
-
-Restart once more, or use *STinG Port Setup* to activate the port.
+With XControl 1.31 ([xctl131.zip](https://chebucto.ns.ca/Services/PDA/xctl131.zip)) and
+the STinG CPX modules you can look at and change STinG's settings in a window. For the
+adapter it is not needed.
 
 ## 6. Try it
 
@@ -138,9 +141,9 @@ Restart once more, or use *STinG Port Setup* to activate the port.
 
 - Measured over the local network: about **57 KB/s** with STinG's own `TCP.STX` 1.35
   and **69 KB/s** with the newer `TCP.STX` 1.41 by chzsoft
-  ([github.com/chzsoft/sting](https://github.com/chzsoft/sting)); just replace
-  `C:\STING\TCP.STX` with it. Recommended. The limit is how often STinG fetches the
-  frames (every 50 ms), not the adapter.
+  ([github.com/chzsoft/sting](https://github.com/chzsoft/sting)), which `STINGINS.TOS`
+  installs. The limit is how often STinG fetches the frames (every 50 ms), not the
+  adapter.
 - Saving is slower: with FTP about **24 KB/s** into a network drive and **11 KB/s**
   onto C: (C: is flash: every small write erases a 4 KB block).
 - The Atari **cannot reach the Pico's own IP address** (the bridge drops such frames:
@@ -151,6 +154,8 @@ Restart once more, or use *STinG Port Setup* to activate the port.
 - STinG and XControl take memory and a timer interrupt. Some games do not start with
   them loaded (seen with Crystal Castles, also without `ACSI_NET.STX`): start those
   without STinG.
+- **`PORTINFO.PRG`** (`atari/sting/`) shows what STinG thinks of its ports and routes and
+  the `ACSI_IP` it read: handy when the port stays off.
 
 ## Troubleshooting
 
@@ -159,7 +164,8 @@ Restart once more, or use *STinG Port Setup* to activate the port.
 | *no ACSI2TNFS found* at start-up | Adapter on, ACSI cable, ACSI id clash (see [ADAPTER.md](ADAPTER.md)) |
 | *firmware without network function* | Firmware too old |
 | *cannot pass frames (no Wi-Fi?)* | Wi-Fi not set up or not connected: `ACSITNFS.PRG`, console `n` |
-| Port cannot be activated | IP address equal to the Pico's, or not a valid address/mask |
+| No line *IP ..., port active* at start-up | `ACSI_IP` missing in `DEFAULT.CFG` (start `STINGINS.TOS`), or LF line ends |
+| *port NOT active (adapter refused)* | IP address equal to the Pico's, or not a valid address/mask |
 | Ping to the router fails | `ROUTE.TAB`, port active, console `w` (frames counted?) |
 | Names do not resolve | `NAMESERVER` in `DEFAULT.CFG`, ping the router first |
 | Download hangs at once | The target drive is full (Show Info on the drive) |

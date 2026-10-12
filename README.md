@@ -61,47 +61,31 @@ troubleshooting) and [docs/TNFS.md](docs/TNFS.md) (network drives, running a TNF
 ## Internet on the Atari (STinG)
 
 The adapter passes network traffic between the Atari and your Wi-Fi network. The Atari
-runs the [STinG](https://github.com/th-otto/STinG) TCP/IP stack (free, for TOS); the
-driver `ACSI_NET.STX` on C: connects STinG to the adapter.
+runs the [STinG](https://github.com/th-otto/STinG) TCP/IP stack (freeware, for TOS); the
+driver `ACSI_NET.STX` connects STinG to the adapter.
 
-**You need:** STinG 1.26 and XControl 1.31 (both free):
+**Install:** start `C:\STINGINS.TOS` on the adapter's drive (with HDDRIVER as your hard
+disk driver this is the adapter's letter, e.g. `K:\STINGINS.TOS`). It carries STinG 1.26
+with TCP.STX 1.41 and asks for:
 
-| | Download |
-|---|---|
-| STinG 1.26 | [sting126.lzh](https://chebucto.ns.ca/Services/PDA/sting126.lzh) ([page](https://chebucto.ns.ca/Services/PDA/AtariSTComm.shtml)) |
-| XControl 1.31 (control panel for the CPX modules) | [xctl131.zip](https://chebucto.ns.ca/Services/PDA/xctl131.zip) |
-| `ACSI_NET.STX` | on C: of the adapter |
+- the drive to install on (the boot drive by default);
+- a **free IP address** for the Atari in your network: not the adapter's own, and
+  outside the range your router hands out;
+- subnet mask, router and name server: it suggests the adapter's own values.
 
-**In short:**
+Restart, and STinG is on the network; XControl is not needed. Start `STINGINS.TOS`
+again to change only the IP settings: your other STinG settings stay.
 
-1. Install STinG: `STING.PRG` and `STING.INF` in `C:\AUTO`, the `STING` folder with
-   `TCP.STX`, `UDP.STX`, `RESOLVE.STX`, `DEFAULT.CFG` and `ROUTE.TAB`.
-2. Copy `C:\ACSI_NET.STX` into the `STING` folder.
-3. Install XControl (`XCONTROL.ACC` in the root of C:, the STinG CPX modules in `C:\CPX`)
-   and restart.
-4. *Desk → Control Panel → STinG Port Setup*: port **ACSI2TNFS**, a **free IP address**
-   of your network, the subnet mask, **Active**, *Save*.
-5. Tell STinG where packets go and who looks up names. With a home network
-   `192.168.178.x` and the router on `192.168.178.1` (use your own numbers; on a PC
-   `ipconfig` shows them as *Default Gateway* and *Subnet Mask*):
-   - `C:\STING\ROUTE.TAB`, instead of the example line (fields separated by tabs):
-     ```text
-     192.168.178.0	255.255.255.0	ACSI2TNFS	0.0.0.0
-     0.0.0.0		0.0.0.0		ACSI2TNFS	192.168.178.1
-     ```
-     Line 1: your own network, directly. Line 2: everything else via the router.
-   - `C:\STING\DEFAULT.CFG`: `NAMESERVER  = 192.168.178.1` (your router).
-
-Test with `PING.PRG` (STinG tools) to your router. Small STinG programs, e.g. a web
+Test with `C:\STING\TOOLS\PING.PRG` to your router. Small STinG programs, e.g. a web
 page viewer: [Network tools for the Atari ST](https://github.com/RetroLoft/atari-net-tools).
 
-Step by step, with example files and troubleshooting: [docs/NETWORK.md](docs/NETWORK.md).
+More, with what the installer writes and troubleshooting: [docs/NETWORK.md](docs/NETWORK.md).
 
 ## Documentation
 
 | | |
 |---|---|
-| [docs/NETWORK.md](docs/NETWORK.md) | Internet with STinG: installation, IP address, ROUTE.TAB, programs, limits |
+| [docs/NETWORK.md](docs/NETWORK.md) | Internet with STinG: the installer, IP address, programs, limits |
 | [docs/TNFS.md](docs/TNFS.md) | Network drives: TNFS servers, writing, what to keep in mind |
 | [docs/ADAPTER.md](docs/ADAPTER.md) | ACSI id, USB console, system files on C:, TOS versions, troubleshooting |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Building, repository layout, ACSI protocol, test tools |
@@ -115,7 +99,9 @@ Step by step, with example files and troubleshooting: [docs/NETWORK.md](docs/NET
   [USB_NET.STX (usbsting)](https://github.com/czietz/usbsting) by Roger Burrows and
   Christian Zietz (GPL-2+), and the frame bridge follows
   [PicoWifi](https://github.com/czietz/picowifi).
-- STinG by Peter Rottengatter and Ronald Andersson.
+- STinG by Peter Rottengatter and Ronald Andersson (freeware); TCP.STX 1.41 by Christian
+  Zietz ([chzsoft/sting](https://github.com/chzsoft/sting)). `STINGINS.TOS` carries
+  them unchanged (`atari/install/sting/`).
 
 ## License
 

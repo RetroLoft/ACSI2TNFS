@@ -213,3 +213,46 @@ Twee dingen moeten op de echte hardware bevestigd worden voordat hierop gebouwd 
 
 1. **Scant AHDI op de Mega STE ook andere ID's dan 0?** Verwacht: ja, maar niet getest. Test met de sniffer-modus: aanzetten en kijken naar welke ID's AHDI commando's stuurt.
 2. **Scant HDDRIVER het ID van de Pico?** HDDRIVER scant alleen de ID's die in de HDDRUTIL-instellingen aanstaan. Het ID van de Pico moet daar dus bij staan.
+
+## Mega STE met HDDRIVER 12: testverslag (12 oktober 2026)
+
+Mega STE, TOS 2.06, BlueSCSI intern (C: t/m J:), HDDRIVER 12.0. De adapter op ACSI-ID 1; onze driver laadt niet, HDDRIVER koppelt alles aan: onze C: wordt K:, de TNFS-drives L:, M:, N:.
+
+- **Bestanden groter dan één cluster gaven "An error occurred while reading the source file".** HDDRIVER (en AHDI) lezen elke GEM-partitie als FAT16; onze C: was FAT12 (1000 clusters), wat onze driver, EmuTOS en DOS uit het aantal clusters afleiden. C: is nu FAT16 met 4096 clusters van 1 sector, waarvan de clusters voorbij de flash als bad gemarkeerd zijn; de TNFS-partities schuiven van LBA 4096 naar 8192. Getest: kopiëren van K: naar de BlueSCSI werkt. Nog te testen: C: op een ST met TOS 1.04 en onze driver (AHDI gebruikt altijd 2 sectoren per cluster).
+- **"Data on the disk in drive M: may be damaged" na een lange zandloper.** HDDRIVER wacht bij het opstarten niet op het netwerk, zoals onze driver; core0 beantwoordde tijdens Wi-Fi, NTP en het inlezen van de TNFS-mappen (40 s voor de LAN-drive) geen enkel verzoek. Nu: drives die nog niet klaar zijn tonen meteen NET_WAIT.TXT, en tijdens het inlezen worden verzoeken tussendoor beantwoord. Getest: geen zandloper en geen melding meer.
+- **Inlezen met READDIRX** in plaats van READDIR + STAT per bestand: de LAN-drive (674 bestanden, 196 mappen) in 3,3 s in plaats van ~40 s.
+- **Een lege TNFS-drive was een serverfout:** beide tnfsd's op de server gaven op OPENDIR status 0x10 (EMFILE): 1024 open handles, de limiet. Vermoedelijk blijft een open map achter als een client (de Pico) halverwege het inlezen uitgaat, ook als tnfsd de sessie later opruimt. Herstart van de tnfsd lost het op.
+- Elke leesopdracht op de Mega STE geeft één /ACK-puls te veel (513 voor 512 bytes): HDDRIVER zet de DMA-teller ruimer en de BC547 laat /DRQ laat los. Onschuldig, maar met de 74LS07 van `v2` verwacht ik het niet meer.
+- Geprobeerd en teruggedraaid: de Pico als removable melden met UNIT ATTENTION op TEST UNIT READY, zodat HDDRIVER een veranderde drive opnieuw inleest. Niet afgerond: de test viel samen met het tnfsd-lek. Zie lazy loading hieronder.
+
+## Ontwerp: TNFS-mappen pas inlezen als de Atari ze opent (lazy loading)
+
+Nu leest de Pico na het mounten de hele boom in en geeft elk bestand en elke map een vaste rij clusters. Bij een grote server raken de knooppunten (1024 voor alle drives samen) of de 16 MB per drive op ("some skipped"), terwijl je in één sessie maar een klein deel gebruikt. Daarom: alleen de root bij het mounten, een submap pas als de Atari een van zijn sectoren leest.
+
+**Hoe het werkt**
+
+- Mounten: OPENDIRX/READDIRX van de root. Elk bestand krijgt zijn rij clusters (de grootte komt uit READDIRX), elke submap een vaste rij van `V_DIRCL` clusters (voorstel 8 = 8 KB = 254 entries) en de vlag "nog niet ingelezen".
+- De Atari leest een sector van een map die nog niet ingelezen is: eerst die map inlezen (READDIRX), zijn kinderen als aaneengesloten blok achteraan in de knooppunten van de drive, met clusters zoals hierboven; dan de sector teruggeven. Met READDIRX kost een map van 200 entries een handvol antwoorden, ook over internet ruim binnen de 9 s van core1.
+- **De harde regel (FAT-cache van GEMDOS):** de Pico houdt per drive bij welke FAT-sectoren de Atari sinds de reset gelezen heeft (64 bits per drive). Nieuwe clusters worden alleen uitgedeeld in FAT-sectoren die de Atari nog niet gezien heeft: wat GEMDOS niet gelezen heeft, kan het niet in zijn cache hebben. Uitdelen gaat altijd oplopend; past een rij niet meer in de huidige FAT-sector of is die al gezien, dan door naar de volgende ongeziene (één FAT-sector = 256 clusters = 256 KB). Clusters die zo overblijven blijven vrij (0) en zijn dan gewoon ruimte voor de Atari om te schrijven. Ook dat botst niet: GEMDOS leest een FAT-sector altijd voordat het er clusters uit neemt, dus die sector is dan al gezien.
+- **Reset van de Atari = opnieuw beginnen:** core1 meldt /RESET aan core0; core0 schrijft eerst wat de Atari nog niet gesynchroniseerd heeft naar de server (vsync), maakt dan per drive de knooppunten, de clusters en de gezien-bits leeg en leest de root opnieuw in. In die tijd toont de drive NET_WAIT.TXT.
+- Schrijven (vsync) loopt alleen door mappen die ingelezen zijn: een map die de Atari nooit gelezen heeft, kan het ook niet veranderd hebben.
+- Vaste verdeling van de knooppunten en de namenpool over de drives (elk 1/n), omdat drives nu door elkaar groeien.
+
+**Grenzen**
+
+- 16 MB per drive per sessie (512-byte sectoren, de TOS 1.x-grens). Een map met grote bestanden kost bij het tonen al hun ruimte: een map met 30 diskette-images van 720 KB past niet helemaal ("skipped").
+- Een map met meer dan 254 entries toont de eerste 254.
+- Leest de Atari de hele FAT (Dfree: "Show info", vrije ruimte bij kopiëren), dan zijn alle FAT-sectoren gezien en kan er tot de volgende reset geen map meer bij. **Plafond (vol of alles gezien): media change** (Frank): gezien-bits leeg en de drive melden als gewisseld, zodat GEMDOS alles opnieuw leest. Onze driver kent media change (vendor sub 10); voor HDDRIVER moet daarvoor UNIT ATTENTION alsnog werken. Dat is fase 2.
+
+**Fases**
+
+1. Lazy inlezen met de FAT-regel, reset = opnieuw beginnen, vsync alleen door ingelezen mappen. Bij een plafond: "skipped" en een melding in de console. Test: L:/M:/N: met onze driver op de ST en met HDDRIVER op de Mega STE, mappen openen, een spel starten, schrijven en weer lezen, reset.
+2. Plafond: media change, met onze driver en (via UNIT ATTENTION) met HDDRIVER.
+
+**Fase 1: testverslag (12 oktober 2026, Mega STE met HDDRIVER)**
+
+- Mounten: de drie roots binnen 0,1 s na Wi-Fi. Mappen worden ingelezen als de desktop ze toont (console: "read /GAMES/1: 40 entries, clusters up to 455, nodes 59/342"); in een sessie met een tiental spellen en programma's hoogstens 105 van 342 knooppunten en 3984 van 16299 clusters.
+- 7 resets: elke keer opnieuw vanaf de root, met dezelfde clusters. Schrijven (HDDRUTIL.INF vanuit HDDRUTIL op N:) gesynchroniseerd naar de server.
+- Eerste ronde: veel spellen laadden niet of liepen vast. Oorzaak: de energiespaarstand van de Wi-Fi (PM2): ping naar de Pico gemiddeld 59 ms (pieken 110 ms) bij weinig verkeer, en een leesopdracht van 64 KB is 128 READs van 512 bytes, dus 2-3 s: HDDRIVER gaf een time-out. De energiespaarstand staat nu altijd uit: ping 7 ms (1 per seconde) en 1,8 ms (snel achter elkaar), 64 KB in 0,7-1 s.
+- Tweede ronde: geen rare dingen meer. Eén leesopdracht van 237 mislukte: een TNFS-READ kreeg vier keer 1 s geen antwoord en de herhaling ook, daarna werkte alles weer. Vanaf de PC leest hetzelfde bestand foutloos (0,8 ms per READ); vermoedelijk hapert de Wi-Fi van de Pico (ook de eerste verbindingspoging mislukt bij elke start). Volgende stap: RSSI in de console en een melding bij elke retry.
+- Nog te testen: onze driver op een ST met TOS 1.04 (vooral schrijven en reset).

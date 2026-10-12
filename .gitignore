@@ -17,3 +17,7 @@ atari/version.inc
 atari/tools/NETTEST.TTP
 atari/sting/*.o
 atari/sting/ACSI_NET.STX
+atari/install/*.o
+atari/install/payload.c
+atari/install/STINGINS.TOS
+atari/sting/PORTINFO.PRG

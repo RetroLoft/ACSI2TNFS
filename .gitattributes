@@ -1,2 +1,4 @@
 # files on C: are built into disk_seed.h: same bytes on every platform
 atari/files/*.TXT text eol=crlf
+# STinG files carried by STINGINS.TOS: bytes as distributed (DEFAULT.CFG needs CR LF)
+atari/install/sting/* -text

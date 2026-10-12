@@ -143,7 +143,8 @@ static err_t bridge_input(struct pbuf *p, struct netif *inp)
 }
 
 /* async context (cyw43 lock held): send what the Atari queued, and follow
-   NET_CTRL / reset: filter and power mode only while the bridge is on */
+   NET_CTRL / reset: the filter only while the bridge is on (Wi-Fi power
+   saving is off all the time, see wifi_connect in net.c) */
 static void bridge_work(async_context_t *ctx, async_when_pending_worker_t *w)
 {
     (void)ctx; (void)w;
@@ -152,11 +153,9 @@ static void bridge_work(async_context_t *ctx, async_when_pending_worker_t *w)
     if (on && !filter_on) {
         lwip_input = n->input;
         n->input = bridge_input;
-        cyw43_wifi_pm(&cyw43_state, CYW43_PERFORMANCE_PM);
         filter_on = true;
     } else if (!on && filter_on) {
         if (n) n->input = lwip_input;
-        cyw43_wifi_pm(&cyw43_state, CYW43_DEFAULT_PM);
         filter_on = false;
     }
     while (tx_tail != tx_head) {

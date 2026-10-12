@@ -240,6 +240,11 @@ uint32_t net_clock_sync_state(void)
 /* ---------------- virtual partition: core1 <-> core0 hand-over ---------------- */
 
 /* core1 posts a sector request, core0 (network) fills or stores the buffer */
+/* core1: the Atari was reset. core0 syncs what it wrote and reads every TNFS
+   tree again from the root; until then its requests see "not ready". */
+static volatile bool atari_reset;
+void net_atari_reset(void) { atari_reset = true; }
+
 static volatile int      vreq_state;         /* 0 idle, 1 pending, 2 done, 3 failed */
 static volatile uint32_t vreq_drive, vreq_rel, vreq_n;
 static volatile bool     vreq_write;
@@ -418,6 +423,13 @@ static bool wifi_connect(void)
         cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);
         net_sleep_ms(250);              /* the first join after power-up often fails */
     }
+    /* no power saving: in PM2 the radio sleeps after 200 ms without traffic
+       and a reply then waits for a beacon (measured: 60 ms average, peaks
+       over 100 ms). Every Atari read of a TNFS file is a run of 512-byte
+       READs, so that made reads slow enough for HDDRIVER to time out. */
+    cyw43_arch_lwip_begin();
+    cyw43_wifi_pm(&cyw43_state, CYW43_NONE_PM);
+    cyw43_arch_lwip_end();
     const ip4_addr_t *ip = netif_ip4_addr(netif_default);
     snprintf(wifi_status, sizeof wifi_status, "connected, IP %s", ip4addr_ntoa(ip));
     printf("net: [%lu ms] Wi-Fi %s\n", (unsigned long)(time_us_64() / 1000), wifi_status);
@@ -448,10 +460,13 @@ typedef struct {
     uint8_t  seq;
     uint8_t  gen;                   /* +1 at every new session (old handles dead) */
     unsigned vmaj, vmin;
-    /* tree: nodes root .. node_end-1 of vn[], cluster owners valloc[va0 .. va0+van-1] */
+    /* tree: nodes root .. node_end-1 of vn[] (room up to node_limit), names
+       pool_start .. pool_end-1 of vpool[], cluster owners valloc[va0 .. va0+van-1] */
     uint16_t root, node_end, node_limit;
-    uint32_t pool_end, pool_limit;
+    uint32_t pool_start, pool_end, pool_limit;
     uint16_t va0, van;
+    uint32_t next_cl;               /* clusters below are handed out         */
+    uint64_t fseen;                 /* FAT sectors the Atari read since its reset */
     uint32_t files, dirs, skipped;
     volatile bool ready;
     /* open file cache */
@@ -895,10 +910,13 @@ static uint32_t le32(const uint8_t *p) { return p[0] | (p[1] << 8) | (p[2] << 16
  *   2*SPF+1 .. +RDLEN      root directory
  *   DATREC ..              clusters 2..
  *
- * The whole tree below the mount point is scanned once after mounting and
- * every file and directory gets a fixed, contiguous run of clusters. The FAT
- * therefore never changes while GEMDOS has it cached. All drives share one
- * node table and name pool; each drive owns a contiguous range of it.
+ * After mounting only the root is read from the server. A folder is read
+ * when the Atari first reads one of its sectors (lazy): its entries become
+ * nodes, each with a fixed, contiguous run of clusters (a folder V_DIRCL).
+ * New runs only go into FAT sectors the Atari has not read since its reset:
+ * GEMDOS cannot have cached those, so the FAT it sees never changes under it.
+ * An Atari reset starts again from the root. All drives share one node table
+ * and name pool; each drive owns a fixed part of them.
  */
 #define V_SPC       2
 #define V_RES       1
@@ -908,6 +926,8 @@ static uint32_t le32(const uint8_t *p) { return p[0] | (p[1] << 8) | (p[2] << 16
 #define V_DATREC    (V_RES + 2 * V_SPF + V_RDLEN)
 #define V_NCL       ((VFAT_SECTORS - V_DATREC) / V_SPC)
 #define V_CLBYTES   (V_SPC * 512)
+#define V_DIRCL     8               /* a folder: 8 KB, 254 entries besides . and .. */
+#define V_DIRENT    (V_DIRCL * V_CLBYTES / 32 - 2)
 
 #define VNODES      1024
 
@@ -927,10 +947,10 @@ typedef struct {
 #define VF_RO       0x01            /* no write permission on the server     */
 #define VF_DEL      0x02            /* deleted on the server                 */
 #define VF_SEEN     0x04            /* found again by the current sync       */
+#define VF_LOADED   0x08            /* folder: entries read from the server  */
+#define VF_HIDE     0x10            /* no clusters left: shown as deleted    */
 
 #define TMP_NAME    "/.A2T.TMP"     /* hidden: the scan skips names with '.' */
-#define NODE_SPARE  64              /* room per drive for new files and dirs */
-#define POOL_SPARE  2048
 
 /* per drive: sector written since the scan (data in TMP_NAME), and since the
    last sync */
@@ -939,11 +959,8 @@ static uint8_t dbits[VDRIVES_MAX][(VFAT_SECTORS + 7) / 8];
 #define BIT(m, r)   ((m)[(r) >> 3] & (1u << ((r) & 7)))
 
 static vnode_t  vn[VNODES];
-static uint16_t vn_count;
-static char     vpool[32768];
-static uint32_t vpool_len;
+static char     vpool[32768];       /* vpool[0] = "": the name of every root */
 static uint16_t valloc[VNODES];     /* nodes that own clusters, per drive in cluster order */
-static uint16_t valloc_n;
 
 static char *vname(uint16_t i) { return vpool + vn[i].name_off; }
 
@@ -993,8 +1010,8 @@ static void make83(uint16_t d, const char *name, char out[11])
         }
         memcpy(out + 8, ext, (size_t)el);
         bool clash = false;
-        /* siblings so far; the node being named is the last one (vn_count - 1) */
-        for (uint16_t k = vn[d].child_start; k + 1 < vn_count; k++)
+        /* siblings so far; the node being named is the last one (node_end - 1) */
+        for (uint16_t k = vn[d].child_start; k + 1 < cur->node_end; k++)
             if (!memcmp(vn[k].n83, out, 11)) { clash = true; break; }
         if (!clash) return;
     }
@@ -1017,8 +1034,9 @@ static bool tnfs_stat(const char *path, uint32_t *size, uint32_t *mtime, bool *i
 static bool vscan_room(uint16_t d, const char *name)
 {
     vdrive_t *dr = cur;
-    if (vn_count < dr->node_limit && (d != dr->root || vn[d].child_count < V_ROOTENT - 1) &&
-        vpool_len + strlen(name) + 1 <= dr->pool_limit) return true;
+    uint32_t max = d == dr->root ? V_ROOTENT - 1 : V_DIRENT;
+    if (dr->node_end < dr->node_limit && vn[d].child_count < max &&
+        dr->pool_end + strlen(name) + 1 <= dr->pool_limit) return true;
     dr->skipped++;
     return false;
 }
@@ -1028,23 +1046,23 @@ static void vscan_add(uint16_t d, const char *name, bool isdir, uint32_t size,
                       uint32_t mtime, bool ro)
 {
     vdrive_t *dr = cur;
-    uint16_t i = vn_count++;
+    uint16_t i = dr->node_end++;
     memset(&vn[i], 0, sizeof vn[i]);
     vn[i].parent = d;
     vn[i].isdir = isdir;
     vn[i].flags = ro && !isdir ? VF_RO : 0;
     vn[i].size = isdir ? 0 : size;
     vn[i].mtime = mtime;
-    vn[i].name_off = vpool_len;
-    strcpy(vpool + vpool_len, name);
-    vpool_len += (uint32_t)strlen(name) + 1;
+    vn[i].name_off = dr->pool_end;
+    strcpy(vpool + dr->pool_end, name);
+    dr->pool_end += (uint32_t)strlen(name) + 1;
     make83(d, name, vn[i].n83);
     vn[d].child_count++;
     if (isdir) dr->dirs++; else dr->files++;
 }
 
 /* OPENDIRX/READDIRX (TNFS 1.2): names with size, time and type, as many as
-   fit in one reply. false: the server does not have it. */
+   fit in one reply. false: OPENDIRX failed (the server may not have it). */
 static bool vscan_dirx(uint16_t d, const char *path)
 {
     static uint8_t req[5 + 256];
@@ -1059,9 +1077,6 @@ static bool vscan_dirx(uint16_t d, const char *path)
     if (n < 8 || rx[4] != 0) return false;
     uint8_t h = rx[5];
     for (bool eof = false; !eof; ) {
-        /* no request in flight here: serve the Atari, also for the drives
-           that are ready already (a large tree takes many seconds) */
-        vreq_service();
         uint8_t q[2] = { h, 0 };                            /* 0: as many as fit */
         n = tnfs_req(0x18, q, 2);                           /* READDIRX */
         if (n < 9 || rx[4] != 0) break;                     /* EOF or error */
@@ -1083,23 +1098,24 @@ static bool vscan_dirx(uint16_t d, const char *path)
     return true;
 }
 
-static void vscan_dir(uint16_t d)
+/* the entries of directory node d become nodes at the end of the drive's
+   part of the table (contiguous). false: the server could not open it. */
+static bool vscan_dir(uint16_t d)
 {
     static char path[256], child[320];      /* not reentrant: keep off the stack */
     vdrive_t *dr = cur;
     vpath(d, path, sizeof path);
-    vn[d].child_start = vn_count;
+    vn[d].child_start = dr->node_end;
     vn[d].child_count = 0;
-    if (!dr->no_dirx) {
-        if (vscan_dirx(d, path)) return;
-        dr->no_dirx = true;                 /* then READDIR + STAT per entry */
+    if (!dr->no_dirx && vscan_dirx(d, path)) return true;
+    int n = tnfs_req(0x10, path, (int)strlen(path) + 1);    /* OPENDIR */
+    if (n < 6 || rx[4] != 0) return false;
+    if (!dr->no_dirx) {                     /* OPENDIRX failed, OPENDIR works */
+        dr->no_dirx = true;
         printf("net: TNFS %d: no READDIRX, reading folders the slow way\n", (int)(dr - vd) + 1);
     }
-    int n = tnfs_req(0x10, path, (int)strlen(path) + 1);    /* OPENDIR */
-    if (n < 6 || rx[4] != 0) return;
     uint8_t h = rx[5];
     for (;;) {
-        vreq_service();                     /* see vscan_dirx */
         n = tnfs_req(0x11, &h, 1);                          /* READDIR */
         if (n < 6 || rx[4] != 0) break;
         rx[n < (int)sizeof rx ? n : (int)sizeof rx - 1] = 0;
@@ -1114,6 +1130,7 @@ static void vscan_dir(uint16_t d)
         vscan_add(d, name, isdir, size, mtime, ro);
     }
     tnfs_req(0x12, &h, 1);                                  /* CLOSEDIR */
+    return true;
 }
 
 /* signature of a cluster chain: changes with any cluster or the length */
@@ -1126,60 +1143,86 @@ static uint32_t run_sig(uint32_t first, uint32_t n)
     return s;
 }
 
-/* scan the current drive into the next free part of the node table */
+/* first cluster of a new run of ncl clusters, 0 = no room. Runs go up, and
+   only into FAT sectors (256 clusters each) the Atari has not read since its
+   reset: GEMDOS may have cached the ones it read. Clusters skipped this way
+   stay free; GEMDOS can only take them after reading their FAT sector. */
+static uint32_t vrun(uint32_t ncl)
+{
+    vdrive_t *d = cur;
+    uint32_t c = d->next_cl;
+    for (;;) {
+        if (c + ncl > V_NCL + 2) return 0;
+        uint32_t s = c / 256, s1 = (c + ncl - 1) / 256;
+        while (s <= s1 && !(d->fseen >> s & 1)) s++;
+        if (s > s1) break;
+        c = (s + 1) * 256;                  /* past the FAT sector it has seen */
+    }
+    d->next_cl = c + ncl;
+    return c;
+}
+
+/* read folder node dir from the server: every entry gets its cluster run,
+   a folder V_DIRCL, a file its size. false: the server could not open it. */
+static bool vdir_load(uint16_t dir)
+{
+    vdrive_t *d = cur;
+    uint32_t skipped0 = d->skipped;
+    if (!vscan_dir(dir)) return false;
+    vn[dir].flags |= VF_LOADED;
+    uint16_t i0 = vn[dir].child_start;
+    for (uint16_t i = i0; i < i0 + vn[dir].child_count; i++) {
+        vnode_t *v = &vn[i];
+        uint32_t ncl = v->isdir ? V_DIRCL : (v->size + V_CLBYTES - 1) / V_CLBYTES;
+        uint32_t c = ncl ? vrun(ncl) : 0;
+        if (ncl && !c) {                    /* does not fit this session */
+            v->flags |= VF_HIDE;
+            d->skipped++;
+            ncl = 0;
+        }
+        v->first_cl = v->start_cl = (uint16_t)c;
+        v->ncl = (uint16_t)ncl;
+        v->sig = run_sig(c, ncl);
+        if (ncl) valloc[d->va0 + d->van++] = i;
+    }
+    if (dir != d->root) {
+        static char p[256];
+        vpath(dir, p, sizeof p);
+        printf("net: TNFS %d: read %s: %u entries, clusters up to %lu, nodes %u/%u%s\n",
+               (int)(d - vd) + 1, p, vn[dir].child_count, (unsigned long)d->next_cl,
+               d->node_end - d->root, d->node_limit - d->root,
+               d->skipped != skipped0 ? " (some skipped)" : "");
+    }
+    return true;
+}
+
+static void vfile_close(void);
+static void tnfs_close(uint8_t h);
+
+/* the current drive's tree from scratch: only the root (after mounting and
+   at every Atari reset); folders follow when the Atari reads them */
 static void vfat_scan(void)
 {
     vdrive_t *d = cur;
-    int left = nvd - (int)(d - vd);                         /* this and later drives */
     d->ready = false;
+    vfile_close();
+    if (d->tmp_open && d->mounted) tnfs_close(d->tmp_handle);
+    d->tmp_open = d->tmp_used = d->wr_pending = false;
     d->files = d->dirs = d->skipped = 0;
-    d->root = vn_count;
-    d->node_limit = (uint16_t)(vn_count + (VNODES - vn_count) / left);
-    d->pool_limit = vpool_len + (uint32_t)(sizeof vpool - vpool_len) / (uint32_t)left;
-    uint16_t r = vn_count++;
+    uint16_t r = d->root;
+    d->node_end = r + 1;
+    d->pool_end = d->pool_start;
+    d->van = 0;
+    d->next_cl = 2;
+    d->fseen = 0;
     memset(&vn[r], 0, sizeof vn[r]);
     vn[r].parent = r;
     vn[r].isdir = 1;
     vn[r].name_off = 0;                                     /* vpool[0] = "" */
-
-    /* breadth first: children of a directory are contiguous in vn[] */
-    for (uint16_t i = r; i < vn_count; i++) {
-        if (!vn[i].isdir) continue;
-        snprintf(d->status, sizeof d->status, "scanning... %lu files, %lu dirs",
-                 (unsigned long)d->files, (unsigned long)d->dirs);
-        vscan_dir(i);
-    }
-    d->node_end = vn_count;
-
-    /* fixed cluster runs, in node order */
-    uint32_t next = 2;
-    d->va0 = valloc_n;
-    for (uint16_t i = r + 1; i < vn_count; i++) {
-        uint32_t bytes = vn[i].isdir ? (uint32_t)(vn[i].child_count + 2) * 32 : vn[i].size;
-        uint32_t ncl = (bytes + V_CLBYTES - 1) / V_CLBYTES;
-        if (next + ncl > V_NCL + 2) {                       /* does not fit: hide */
-            ncl = 0;
-            vn[i].size = 0;
-            d->skipped++;
-        }
-        vn[i].first_cl = vn[i].start_cl = ncl ? (uint16_t)next : 0;
-        vn[i].ncl = (uint16_t)ncl;
-        vn[i].sig = run_sig(vn[i].first_cl, ncl);
-        if (ncl) valloc[valloc_n++] = i;
-        next += ncl;
-    }
-    d->van = (uint16_t)(valloc_n - d->va0);
-
-    /* keep room for files and directories the Atari creates */
-    d->pool_end = vpool_len;
-    if (d->node_limit > d->node_end + NODE_SPARE) d->node_limit = (uint16_t)(d->node_end + NODE_SPARE);
-    if (d->pool_limit > d->pool_end + POOL_SPARE) d->pool_limit = d->pool_end + POOL_SPARE;
-    vn_count = d->node_limit;
-    vpool_len = d->pool_limit;
+    vdir_load(r);
     int k = (int)(d - vd);
     memset(wbits[k], 0, sizeof wbits[k]);
     memset(dbits[k], 0, sizeof dbits[k]);
-    d->tmp_open = d->tmp_used = d->wr_pending = false;
     __dmb();
     d->ready = true;
 }
@@ -1249,6 +1292,7 @@ static void vdir_entry(uint16_t d, uint32_t k, uint8_t *e)
     }
     if (k >= vn[d].child_count) return;
     const vnode_t *v = &vn[vn[d].child_start + k];
+    if (v->flags & VF_HIDE) { e[0] = 0xe5; return; }        /* no clusters: "deleted" */
     vdirent(e, v->n83, v->isdir ? 0x10 : (v->flags & VF_RO) ? 0x01 : 0x00,
             v->mtime, v->first_cl, v->size);
 }
@@ -1485,6 +1529,8 @@ static bool vfat_sector(uint32_t rel, uint8_t *buf)
     if (nd < 0 || (vn[nd].flags & VF_DEL)) return true;     /* free or deleted: zeros */
     uint32_t off = ((c - vn[nd].first_cl) * V_SPC + s) * 512;
     if (vn[nd].isdir) {
+        /* the first look into this folder: read it from the server now */
+        if (!(vn[nd].flags & VF_LOADED) && !vdir_load((uint16_t)nd)) return false;
         for (uint32_t k = 0; k < 16; k++) vdir_entry((uint16_t)nd, off / 32 + k, buf + k * 32);
         return true;
     }
@@ -1509,9 +1555,20 @@ static void vreq_service(void)
     vdrive_t *save = cur;
     bool ok = vreq_drive < (uint32_t)nvd;
     if (ok) cur = &vd[vreq_drive];
-    for (uint32_t i = 0; i < vreq_n && ok; i++)
-        ok = vreq_write ? vfat_write(vreq_rel + i, vreq_buf + i * 512)
-                        : vfat_sector(vreq_rel + i, vreq_buf + i * 512);
+    /* after an Atari reset, until the trees are read again (net_poll): as
+       not ready, so the fresh GEMDOS caches nothing of the old tree. A sync
+       running meanwhile still sees the old tree. */
+    bool held = ok && atari_reset && cur->ready;
+    if (held) cur->ready = false;
+    for (uint32_t i = 0; i < vreq_n && ok; i++) {
+        uint32_t rel = vreq_rel + i;
+        ok = vreq_write ? vfat_write(rel, vreq_buf + i * 512)
+                        : vfat_sector(rel, vreq_buf + i * 512);
+        /* a FAT sector the Atari has now: no new cluster runs in it (vrun) */
+        if (ok && cur->ready && rel >= 1 && rel < 1 + 2 * V_SPF)
+            cur->fseen |= 1ull << ((rel - 1) % V_SPF);
+    }
+    if (held) cur->ready = true;
     if (vreq_write) fsec_rel = -1;          /* the FAT may have changed */
     cur = save;
     __dmb();
@@ -1609,6 +1666,7 @@ static int vnode_new(uint16_t dir, const char *n83, bool isdir)
     memset(&vn[i], 0, sizeof vn[i]);
     if (!vnode_place(i, dir, n83)) return -1;
     vn[i].isdir = isdir;
+    vn[i].flags = isdir ? VF_LOADED : 0;                    /* new: nothing on the server */
     vn[i].start_cl = 0xffff;                                /* never synced */
     vn[i].size = 0xffffffffu;
     d->node_end++;
@@ -1702,7 +1760,9 @@ static void vsync_entry(uint16_t dir, const uint8_t *e, uint16_t *queue, int *nq
     vn[n].flags |= VF_SEEN;
     if (isdir) {
         vn[n].start_cl = (uint16_t)c;
-        queue[(*nq)++] = (uint16_t)n;
+        /* a folder the Atari never read cannot have changed: skip it, and
+           reading it here would load it from the server */
+        if (vn[n].flags & VF_LOADED) queue[(*nq)++] = (uint16_t)n;
         return;
     }
     bool dirty;
@@ -1733,7 +1793,9 @@ static void vsync(void)
     memset(dbits[k0], 0, sizeof dbits[0]);
     d->wr_pending = false;                  /* writes from now on: next sync */
     fsec_rel = -1;
-    for (uint16_t i = d->root; i < d->node_end; i++) vn[i].flags &= (uint8_t)~VF_SEEN;
+    /* nodes from here on are folders read while we sync (vreq_service) */
+    uint16_t end0 = d->node_end;
+    for (uint16_t i = d->root; i < end0; i++) vn[i].flags &= (uint8_t)~VF_SEEN;
     vn[d->root].flags |= VF_SEEN;
     queue[nq++] = d->root;
     for (int qi = 0; qi < nq; qi++) {
@@ -1766,10 +1828,11 @@ static void vsync(void)
             c = vfat_get(c);
         }
     }
-    /* nodes GEMDOS no longer has: children before their directory */
-    for (int i = d->node_end - 1; i > d->root; i--) {
+    /* nodes GEMDOS no longer has: children before their directory. Hidden
+       ones (no clusters this session) GEMDOS never had. */
+    for (int i = end0 - 1; i > d->root; i--) {
         vnode_t *v = &vn[i];
-        if (v->flags & (VF_SEEN | VF_DEL)) continue;
+        if (v->flags & (VF_SEEN | VF_DEL | VF_HIDE)) continue;
         vpath((uint16_t)i, path, sizeof path);
         vfile_close();
         bool ok = tnfs_path(v->isdir ? 0x14 : 0x26, path);
@@ -1806,11 +1869,19 @@ static void drives_down(void)
 static void tnfs_connect_and_scan(void)
 {
     drives_down();
-    vn_count = 0;
-    valloc_n = 0;
     vpool[0] = 0;
-    vpool_len = 1;
-    for (int i = 0; i < nvd; i++) { vd[i].failed = false; vdrive_wait(&vd[i]); }
+    /* each drive a fixed part of the node table and name pool: they grow
+       whenever the Atari reads a folder */
+    for (int i = 0; i < nvd; i++) {
+        vdrive_t *d = &vd[i];
+        d->root = d->node_end = d->va0 = (uint16_t)(i * VNODES / nvd);
+        d->node_limit = (uint16_t)((i + 1) * VNODES / nvd);
+        d->van = 0;
+        d->pool_start = d->pool_end = 1 + (uint32_t)i * (sizeof vpool - 1) / (uint32_t)nvd;
+        d->pool_limit = 1 + (uint32_t)(i + 1) * (sizeof vpool - 1) / (uint32_t)nvd;
+        d->failed = false;
+        vdrive_wait(d);
+    }
     if (!wifi_connect()) {
         if (g_set.rtc_enabled && clk_state != CLK_VALID) clk_state = CLK_NONE;
         char why[120];
@@ -1853,7 +1924,7 @@ static void tnfs_connect_and_scan(void)
         }
         if (vn[d->root].child_count && len < (int)sizeof d->dir - 3) strcpy(d->dir + len, "\r\n");
         snprintf(d->status, sizeof d->status,
-                 "OK! %s, TNFS %u.%u: %lu files, %lu dirs%s",
+                 "OK! %s, TNFS %u.%u: root %lu files, %lu dirs%s",
                  d->use_tcp ? "TCP" : "UDP", d->vmaj, d->vmin,
                  (unsigned long)d->files, (unsigned long)d->dirs, d->skipped ? " (some skipped)" : "");
         printf("net: TNFS %d %s\n", i + 1, d->status);
@@ -1888,6 +1959,18 @@ void net_poll(void)
     if (test_req) {
         test_req = false;
         tnfs_connect_and_scan();
+    }
+    if (atari_reset) {
+        /* a fresh GEMDOS: first to the server what the Atari wrote, then
+           every tree again from the root (the clusters start anew) */
+        for (int i = 0; i < nvd; i++) {
+            if (!vd[i].ready) continue;
+            cur = &vd[i];
+            if (cur->wr_pending) vsync();
+            vfat_scan();
+            cur = NULL;
+        }
+        atari_reset = false;
     }
     vreq_service();
     /* a second after the last write: bring the server in line */

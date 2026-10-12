@@ -844,6 +844,7 @@ static void __not_in_flash_func(target_loop)(void)
                 in_reset = true;
                 g_cfg.mute_until_reset = false;     /* fresh GEMDOS: safe again */
                 net_bridge_reset();                 /* STinG is gone */
+                net_atari_reset();                  /* fresh GEMDOS: TNFS from the root */
                 stage_flush();                      /* core0 may change C: now */
                 stage_blk = -1;
                 bus_idle();

@@ -66,8 +66,12 @@ From then on the Atari boots with C:, the network drives and the right time.
 - **Drive letters** for network drives: D: to P: (TOS knows 16 drives).
 - **TOS 1.x with several drives:** put `FOLDR100.PRG` (from Atari's AHDI) in `C:\AUTO`,
   or TOS runs out of folder memory ("use FOLDR100.PRG").
-- **Read-only files on C:** `README.TXT`, `ACSITNFS.PRG`, `ACSI_NET.STX` and
-  `STINGINS.TOS` come with the firmware. Your own files (DESKTOP.INF, an AUTO folder, …)
+- **Clock without our driver:** with HDDRIVER (Mega STE) or on a TT booting from its own
+  disk the adapter's driver does not load and does not set the clock. Copy
+  `C:\NETCLOCK.PRG` into your AUTO folder: it waits for the adapter's Wi-Fi and time
+  server (up to 30 s each, ESC skips) and sets the clock.
+- **Read-only files on C:** `README.TXT`, `ACSITNFS.PRG`, `ACSI_NET.STX`,
+  `STINGINS.TOS` and `NETCLOCK.PRG` come with the firmware. Your own files (DESKTOP.INF, an AUTO folder, …)
   stay when you update the firmware.
 
 More: [docs/ADAPTER.md](docs/ADAPTER.md) (USB console, ACSI id, hidden mode, C:,

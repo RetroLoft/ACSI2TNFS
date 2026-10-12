@@ -265,3 +265,9 @@ Nu leest de Pico na het mounten de hele boom in en geeft elk bestand en elke map
 - STINGINS.TOS (StinG 1.26, TCP 1.41, UDP, RESOLVE, ACSI_NET 00.08, PING): installatie zonder XControl getest, URLVIEW en ping werken. Opnieuw starten biedt "alleen netwerkinstellingen" aan. Gevonden en opgelost: de voorgestelde gateway was 255.255.178.1 (tekenuitbreiding van `p[2] << 8` met `-mshort`).
 - "Alleen netwerkinstellingen" (keuze 1) naar een ander IP-adres getest: werkt zonder problemen.
 - Nog te doen: een installatie op een ST met TOS 1.04 en onze driver; een nieuw systeembestand komt op een bestaande C: pas met `R` (sysfiles zet ontbrekende bestanden niet vanzelf terug, omdat de gebruiker ze ook bewust gewist kan hebben).
+
+## NETCLOCK.PRG: testverslag (12 oktober 2026, Mega STE)
+
+- Onder HDDRIVER laadt onze driver niet en zet niemand de klok. NETCLOCK.PRG (in AUTO) vraagt de netwerktijd aan de adapter (vendor sub 9, als de driver), wacht per stap tot 30 s op Wi-Fi en de tijdserver met een aftelling (ESC slaat over) en zet `Tsetdate`, `Tsettime` en `Settime`. Getest: de klok staat goed, met de UTC-afwijking die de Pico toepast.
+- ACSI_NET.STX telt nu ook af bij het wachten op Wi-Fi, in plaats van puntjes.
+- De UTC-afwijking is vast (`+1`): zomer- en wintertijd past de firmware niet zelf toe. Op 12 oktober is het in Amsterdam UTC+2.

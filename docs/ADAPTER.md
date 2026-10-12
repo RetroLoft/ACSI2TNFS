@@ -37,6 +37,9 @@ come from C:.
 - **EmuTOS** mounts the partitions with its own ACSI driver as C:, D:, E:, …; the chosen
   letters and the network clock do not apply there.
 - **TOS 1.0** does not see the adapter; TOS 1.02 and later do.
+- **The clock** is set by the adapter's driver. Where that driver does not load (HDDRIVER
+  on a Mega STE, a TT booting from its own disk), put `NETCLOCK.PRG` from C: in the AUTO
+  folder: it asks the adapter for the network time and sets the clock.
 
 ## USB console
 

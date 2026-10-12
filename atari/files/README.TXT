@@ -10,6 +10,9 @@ What is on this disk?
                clock and ACSI device ID
   ACSI_NET.STX STinG driver: internet on the Atari (see below)
   STINGINS.TOS installs STinG for the adapter (see below)
+  NETCLOCK.PRG sets the clock from the network time, for the
+               AUTO folder when this disk's driver does not
+               load (HDDRIVER, a TT booting from its own disk)
 
 How does it work?
   - The Pico answers ACSI commands on its own device ID

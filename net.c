@@ -527,6 +527,8 @@ static void drives_from_settings(void)
     }
 }
 
+static uint32_t tnfs_retries, tnfs_lost;    /* console n: how the network does */
+
 uint32_t net_vdrives(void) { return (uint32_t)nvd; }
 uint8_t net_vdrive_letter(uint32_t k) { return k < (uint32_t)nvd ? vd[k].letter : 0; }
 
@@ -537,6 +539,15 @@ uint32_t net_status_text(char *p, uint32_t max)
                       if (r_ > 0) n = n + (uint32_t)r_ < max ? n + (uint32_t)r_ : max - 1; } while (0)
     ADD("\r\nWi-Fi SSID : %s\r\nWi-Fi      : %s\r\n",
         g_net.ssid[0] ? g_net.ssid : "(not set)", wifi_status);
+    if (net_link_up()) {
+        int32_t rssi = 0;
+        cyw43_arch_lwip_begin();
+        int r = cyw43_wifi_get_rssi(&cyw43_state, &rssi);
+        cyw43_arch_lwip_end();
+        if (r == 0) ADD("Wi-Fi RSSI : %ld dBm\r\n", (long)rssi);
+    }
+    ADD("TNFS       : %lu retries, %lu requests without answer since start\r\n",
+        (unsigned long)tnfs_retries, (unsigned long)tnfs_lost);
     if (!nvd) ADD("TNFS       : no drive configured\r\n");
     for (int i = 0; i < nvd; i++)
         ADD("TNFS %d     : %s:%u %s\r\n  %s\r\n%s", i + 1, vd[i].server, vd[i].port,
@@ -690,7 +701,10 @@ static int tnfs_req1(uint8_t cmd, const void *data, int dlen)
             if (d->use_tcp && d->tcp_dead) return -1;
             net_sleep_ms(2);
         }
+        if (attempt + 1 < (d->use_tcp ? 1 : 4)) tnfs_retries++;
+        printf("net: TNFS %d: no answer to 0x%02x (try %d)\n", (int)(d - vd) + 1, cmd, attempt + 1);
     }
+    tnfs_lost++;
     return -1;
 }
 

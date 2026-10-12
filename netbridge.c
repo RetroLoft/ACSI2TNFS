@@ -364,7 +364,7 @@ void net_bridge_console(void)               /* core0: 'w' */
     printf("Atari network (ACSI_NET)\n");
     printf("  state    : %s%s\n", atari_enabled ? "bridge on" : "off",
 #if BOARD_HAS_WIFI
-           filter_on ? ", filter installed, Wi-Fi performance mode" : "");
+           filter_on ? ", filter installed" : "");
 #else
            "");
 #endif

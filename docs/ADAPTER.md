@@ -6,6 +6,17 @@ Every device on the ACSI bus needs its own id (0–7); two devices on one id ans
 same time and neither works. A new adapter uses **id 6**, as an internal Mega ST disk, a
 Megafile or an UltraSatan usually sits on 0.
 
+**Mega STE and TT: use the first free id**, or the machine does not see the adapter:
+
+| Machine | Id | Why |
+|---|---|---|
+| TT (TOS 3.06) | **0** | TOS only asks id 0 at start-up; the TT's own disk is SCSI |
+| Mega STE | **1** | the internal hard disk adapter is on id 0; with HDDRIVER switch id 1 on in HDDRUTIL |
+| ST, STE, Mega ST | 6 (or any free id) | our boot code and AHDI/HDDRIVER ask every id |
+
+Not sure which ids a machine asks? Console `s` (sniffer) logs every ACSI command with its
+id; `t` goes back.
+
 To change it:
 
 - `ACSITNFS.PRG` → *Config → More → ACSI device ID*, then *Save* and restart.

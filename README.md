@@ -15,8 +15,22 @@ or TT. To the Atari it is a hard disk; behind it is Wi-Fi.
 No software to install for the disk part: the adapter brings its own driver. A GEM
 program, **ACSITNFS.PRG**, sets up Wi-Fi, network drives, clock and the ACSI id.
 
-> Status: working on real hardware (ST with TOS 1.02/1.04 and EmuTOS). The network
-> function (STinG) is new and still being refined.
+> Status: working on real hardware: ST with TOS 1.02/1.04, Mega STE (TOS 2.06, HDDRIVER),
+> TT (TOS 3.06) and EmuTOS. The network function (STinG) is new and still being refined.
+
+> [!IMPORTANT]
+> ## MEGA STE AND TT: SET THE ADAPTER TO THE FIRST FREE ACSI ID
+>
+> **A new adapter uses ACSI id 6. On a Mega STE or a TT the machine does not see it there.**
+>
+> - **TT:** TOS 3.06 only asks ACSI id **0** at start-up. Its own hard disk is SCSI, so
+>   use **id 0**.
+> - **Mega STE:** the internal hard disk adapter is on id 0, so use **id 1**. With
+>   HDDRIVER also switch id 1 on in HDDRUTIL.
+> - In general: the lowest id that no other device on the ACSI port uses.
+>
+> Set it with the USB console (key `0`–`7`) or `ACSITNFS.PRG` → *Config → More*, then
+> restart the Atari. See [docs/ADAPTER.md](docs/ADAPTER.md#acsi-id).
 
 ## What you need
 
@@ -47,12 +61,13 @@ From then on the Atari boots with C:, the network drives and the right time.
 ### Good to know
 
 - **ACSI id.** A new adapter uses ACSI id **6**, so it does not clash with a hard disk on
-  id 0. Every device on the ACSI bus needs its own id.
+  id 0. Every device on the ACSI bus needs its own id. **Mega STE and TT: the first free
+  id** (see above).
 - **Drive letters** for network drives: D: to P: (TOS knows 16 drives).
 - **TOS 1.x with several drives:** put `FOLDR100.PRG` (from Atari's AHDI) in `C:\AUTO`,
   or TOS runs out of folder memory ("use FOLDR100.PRG").
-- **Read-only files on C:** `README.TXT`, `ACSITNFS.PRG` and `ACSI_NET.STX` come with
-  the firmware. Your own files (DESKTOP.INF, an AUTO folder, …)
+- **Read-only files on C:** `README.TXT`, `ACSITNFS.PRG`, `ACSI_NET.STX` and
+  `STINGINS.TOS` come with the firmware. Your own files (DESKTOP.INF, an AUTO folder, …)
   stay when you update the firmware.
 
 More: [docs/ADAPTER.md](docs/ADAPTER.md) (USB console, ACSI id, hidden mode, C:,

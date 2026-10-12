@@ -28,8 +28,8 @@ typedef BASEPAGE BASPAG;                    /* Pure C name used by the headers *
 
 #define DRIVER_NAME   "ACSI_NET.STX"
 #define PORT_NAME     "ACSI2TNFS"
-#define VERSION       "00.07"
-#define MOD_DATE      (((2026 - 1980) << 9) | (10 << 5) | 4)
+#define VERSION       "00.08"
+#define MOD_DATE      (((2026 - 1980) << 9) | (10 << 5) | 12)
 
 #define MAX_FRAMES_PER_POLL 16              /* receive: frames per STinG call */
 #define MAX_SENDS_PER_POLL  4               /* send: datagrams per STinG call */
@@ -147,6 +147,39 @@ static void say(const char *s)
         if (*s == '\n') Bconout(2, '\r');
         Bconout(2, *s++);
     }
+}
+
+static void say_ip(uint32 ip)
+{
+    int i;
+    for (i = 24; i >= 0; i -= 8) {
+        uint16 n = (uint16)(ip >> i & 0xff);
+        char d[4], *p = d + 3;
+        *p = '\0';
+        do *--p = (char)('0' + n % 10); while (n /= 10);
+        say(p);
+        if (i) say(".");
+    }
+}
+
+/* "a.b.c.d" (spaces around it allowed) -> *ip; 0 = not an address */
+static int parse_ip(const char *s, uint32 *ip)
+{
+    uint32 v = 0;
+    int part;
+    while (*s == ' ' || *s == '\t') s++;
+    for (part = 0; part < 4; part++) {
+        uint16 n = 0;
+        int digits = 0;
+        if (part && *s++ != '.') return 0;
+        while (*s >= '0' && *s <= '9' && digits < 3) n = (uint16)(n * 10 + (*s++ - '0')), digits++;
+        if (!digits || n > 255) return 0;
+        v = v << 8 | n;
+    }
+    while (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n') s++;
+    if (*s) return 0;
+    *ip = v;
+    return 1;
 }
 
 /* ---------------- ARP cache ---------------- */
@@ -468,8 +501,22 @@ void _init(BASEPAGE *bp)
         quit("no ACSI2TNFS found on ACSI id 0-7, not installed\n");
     if (cmd(NET_INFO, 0) != ST_OK || !same(txbuf, "ATN", 3))
         quit("ACSI2TNFS firmware without network function, not installed\n");
-    if (!(get16(txbuf + 6) & 0x0002))
-        quit("ACSI2TNFS cannot pass frames (no Wi-Fi?), not installed\n");
+    if (!(get16(txbuf + 6) & 0x0002)) {
+        /* the adapter may still be joining Wi-Fi after power-on: our boot
+           driver waits for that, HDDRIVER does not. About 30 s. */
+        int t, f;
+        say(DRIVER_NAME ": waiting for the adapter's Wi-Fi (key: skip)");
+        for (t = 0; t < 60; t++) {
+            for (f = 0; f < 25; f++) Vsync();
+            say(".");
+            if (Bconstat(2)) { Bconin(2); break; }
+            if (cmd(NET_INFO, 0) == ST_OK && same(txbuf, "ATN", 3) && (get16(txbuf + 6) & 0x0002))
+                break;
+        }
+        say("\n");
+        if (!same(txbuf, "ATN", 3) || !(get16(txbuf + 6) & 0x0002))
+            quit("ACSI2TNFS cannot pass frames (no Wi-Fi?), not installed\n");
+    }
     memcpy(mac, txbuf + 10, ETH_ALEN);
 
     query_chains((void **)&ports, (void **)&drv, NULL);
@@ -480,5 +527,22 @@ void _init(BASEPAGE *bp)
     drv->next = &my_driver;
 
     say(DRIVER_NAME " " VERSION ": port " PORT_NAME " installed\n");
+
+    /* the address from DEFAULT.CFG (ACSI_IP, ACSI_MASK, written by the
+       installer): then the port works without STNGPORT.CPX in XControl.
+       Without ACSI_IP the CPX sets it from STING.PRT, as before. */
+    {
+        uint32 ip, mask;
+        if (parse_ip(getvstr((char *)"ACSI_IP"), &ip)) {
+            if (!parse_ip(getvstr((char *)"ACSI_MASK"), &mask)) mask = 0xffffff00UL;
+            my_port.ip_addr = ip;
+            my_port.sub_mask = mask;
+            say(DRIVER_NAME ": IP ");
+            say_ip(ip);
+            say(", mask ");
+            say_ip(mask);
+            say(on_port((char *)PORT_NAME) ? ", port active\n" : ", port NOT active (adapter refused)\n");
+        }
+    }
     Ptermres(size, 0);
 }

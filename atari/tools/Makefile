@@ -4,6 +4,7 @@ CFLAGS = -m68000 -O2 -Wall -fomit-frame-pointer
 
 NETTEST.TTP: nettest.c
 	$(CC) $(CFLAGS) -o $@ $< -s
+	m68k-atari-mint-flags -q --mno-altram --mno-altalloc $@   # ACSI DMA: ST-RAM only (TT)
 
 clean:
 	rm -f NETTEST.TTP

@@ -5,6 +5,7 @@ STING = ../sting
 
 STINGINS.TOS: init.o stingins.o acsinet.o payload.o
 	$(CC) -mshort -nostdlib -o $@ $^ -lgcc -s
+	m68k-atari-mint-flags -q --mno-altram --mno-altalloc $@   # ACSI DMA: ST-RAM only (TT)
 
 init.o: $(STING)/init.S
 	$(CC) $(CFLAGS) -c $< -o $@

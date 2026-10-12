@@ -437,6 +437,7 @@ typedef struct {
     char     path[33];
     uint16_t port;
     bool     prefer_tcp;
+    bool     no_dirx;               /* server has no OPENDIRX/READDIRX       */
     /* connection */
     ip_addr_t ip;
     bool     use_tcp, mounted;
@@ -702,8 +703,8 @@ static int tnfs_req(uint8_t cmd, const void *data, int dlen)
     d->vf_node = -1;                        /* handles of the old session */
     d->tmp_open = false;
     switch (cmd) {
-    case 0x10: case 0x13: case 0x14: case 0x24: case 0x26: case 0x28: case 0x29:
-        return tnfs_req1(cmd, data, dlen);  /* OPENDIR MKDIR RMDIR STAT UNLINK RENAME OPEN */
+    case 0x10: case 0x13: case 0x14: case 0x17: case 0x24: case 0x26: case 0x28: case 0x29:
+        return tnfs_req1(cmd, data, dlen);  /* OPENDIR MKDIR RMDIR OPENDIRX STAT UNLINK RENAME OPEN */
     default:
         return -1;
     }
@@ -1012,6 +1013,76 @@ static bool tnfs_stat(const char *path, uint32_t *size, uint32_t *mtime, bool *i
     return true;
 }
 
+/* room for one more entry in directory d of the current drive? */
+static bool vscan_room(uint16_t d, const char *name)
+{
+    vdrive_t *dr = cur;
+    if (vn_count < dr->node_limit && (d != dr->root || vn[d].child_count < V_ROOTENT - 1) &&
+        vpool_len + strlen(name) + 1 <= dr->pool_limit) return true;
+    dr->skipped++;
+    return false;
+}
+
+/* a new node for an entry of directory d (vscan_room said yes) */
+static void vscan_add(uint16_t d, const char *name, bool isdir, uint32_t size,
+                      uint32_t mtime, bool ro)
+{
+    vdrive_t *dr = cur;
+    uint16_t i = vn_count++;
+    memset(&vn[i], 0, sizeof vn[i]);
+    vn[i].parent = d;
+    vn[i].isdir = isdir;
+    vn[i].flags = ro && !isdir ? VF_RO : 0;
+    vn[i].size = isdir ? 0 : size;
+    vn[i].mtime = mtime;
+    vn[i].name_off = vpool_len;
+    strcpy(vpool + vpool_len, name);
+    vpool_len += (uint32_t)strlen(name) + 1;
+    make83(d, name, vn[i].n83);
+    vn[d].child_count++;
+    if (isdir) dr->dirs++; else dr->files++;
+}
+
+/* OPENDIRX/READDIRX (TNFS 1.2): names with size, time and type, as many as
+   fit in one reply. false: the server does not have it. */
+static bool vscan_dirx(uint16_t d, const char *path)
+{
+    static uint8_t req[5 + 256];
+    static char name[128];
+    req[0] = 0;                                             /* skip ., .., hidden */
+    req[1] = 0;                                             /* default sort */
+    req[2] = req[3] = 0;                                    /* all entries */
+    req[4] = 0;                                             /* no pattern */
+    int pl = (int)strlen(path);
+    memcpy(req + 5, path, (size_t)pl + 1);
+    int n = tnfs_req(0x17, req, 5 + pl + 1);                /* OPENDIRX */
+    if (n < 8 || rx[4] != 0) return false;
+    uint8_t h = rx[5];
+    for (bool eof = false; !eof; ) {
+        /* no request in flight here: serve the Atari, also for the drives
+           that are ready already (a large tree takes many seconds) */
+        vreq_service();
+        uint8_t q[2] = { h, 0 };                            /* 0: as many as fit */
+        n = tnfs_req(0x18, q, 2);                           /* READDIRX */
+        if (n < 9 || rx[4] != 0) break;                     /* EOF or error */
+        int count = rx[5], p = 9;
+        eof = rx[6] & 0x01;
+        for (int k = 0; k < count && p + 14 <= n; k++) {
+            bool isdir = rx[p] & 0x01;
+            uint32_t size = le32(rx + p + 1), mtime = le32(rx + p + 5);
+            p += 13;                                        /* flags size mtime ctime */
+            int e = p;
+            while (e < n && rx[e]) e++;
+            if (e >= n) break;
+            snprintf(name, sizeof name, "%s", (const char *)rx + p);
+            p = e + 1;
+            if (name[0] != '.' && vscan_room(d, name)) vscan_add(d, name, isdir, size, mtime, false);
+        }
+    }
+    tnfs_req(0x12, &h, 1);                                  /* CLOSEDIR */
+    return true;
+}
+
 static void vscan_dir(uint16_t d)
 {
     static char path[256], child[320];      /* not reentrant: keep off the stack */
@@ -1019,38 +1090,28 @@ static void vscan_dir(uint16_t d)
     vpath(d, path, sizeof path);
     vn[d].child_start = vn_count;
     vn[d].child_count = 0;
+    if (!dr->no_dirx) {
+        if (vscan_dirx(d, path)) return;
+        dr->no_dirx = true;                 /* then READDIR + STAT per entry */
+        printf("net: TNFS %d: no READDIRX, reading folders the slow way\n", (int)(dr - vd) + 1);
+    }
     int n = tnfs_req(0x10, path, (int)strlen(path) + 1);    /* OPENDIR */
     if (n < 6 || rx[4] != 0) return;
     uint8_t h = rx[5];
     for (;;) {
-        /* no request in flight here: serve the Atari, also for the drives
-           that are ready already (a large tree takes many seconds) */
-        vreq_service();
+        vreq_service();                     /* see vscan_dirx */
         n = tnfs_req(0x11, &h, 1);                          /* READDIR */
         if (n < 6 || rx[4] != 0) break;
         rx[n < (int)sizeof rx ? n : (int)sizeof rx - 1] = 0;
         static char name[128];
         snprintf(name, sizeof name, "%s", (const char *)rx + 5);
         if (name[0] == '.') continue;                       /* ., .., hidden */
-        if (vn_count >= dr->node_limit || (d == dr->root && vn[d].child_count >= V_ROOTENT - 1) ||
-            vpool_len + strlen(name) + 1 > dr->pool_limit) { dr->skipped++; continue; }
+        if (!vscan_room(d, name)) continue;
         snprintf(child, sizeof child, "%s%s%s", path, strcmp(path, "/") ? "/" : "", name);
         uint32_t size = 0, mtime = 0;
         bool isdir = false, ro = false;
         if (!tnfs_stat(child, &size, &mtime, &isdir, &ro)) { dr->skipped++; continue; }
-        uint16_t i = vn_count++;
-        memset(&vn[i], 0, sizeof vn[i]);
-        vn[i].parent = d;
-        vn[i].isdir = isdir;
-        vn[i].flags = ro && !isdir ? VF_RO : 0;
-        vn[i].size = isdir ? 0 : size;
-        vn[i].mtime = mtime;
-        vn[i].name_off = vpool_len;
-        strcpy(vpool + vpool_len, name);
-        vpool_len += (uint32_t)strlen(name) + 1;
-        make83(d, name, vn[i].n83);
-        vn[d].child_count++;
-        if (isdir) dr->dirs++; else dr->files++;
+        vscan_add(d, name, isdir, size, mtime, ro);
     }
     tnfs_req(0x12, &h, 1);                                  /* CLOSEDIR */
 }

@@ -2,7 +2,7 @@
  * ACSI2TNFS - built-in files on the flash disk C:
  *
  * The built-in disk image (disk_seed.h, made by atari/mkdisk.py) holds the
- * system files: README.TXT and ACSITNFS.PRG, stored read-only. The user's own
+ * system files (atari/files: README.TXT, ACSITNFS.PRG, ...), stored read-only. The user's own
  * files (DESKTOP.INF, an AUTO folder, ...) live next to them on the same FAT.
  * sysfiles_sync() brings the system files on C: in line with the image
  * without touching anything else: a changed file (new firmware) is replaced
@@ -22,44 +22,78 @@
 #define ATTR_VOLUME 0x08
 #define ATTR_DIR    0x10
 
-/* ---------------- flash access with a one-block write cache ---------------- */
+/* ---------------- flash access with a small write cache ----------------
+ *
+ * A file goes on cluster by cluster, and every cluster touches its data block
+ * and a block of each FAT. With one block cached that was three erases per
+ * cluster: ACSITNFS.PRG took a minute without a console, and an erase that
+ * was interrupted left a FAT empty. With a few blocks the FAT blocks stay in
+ * RAM while the data streams through; at the end the highest blocks go first:
+ * data, root directory, FAT 2 (the one TOS reads), FAT 1.
+ */
+#define WC_SLOTS 4
 
-static uint8_t  wc_buf[FLASH_SECTOR_SIZE];     /* RAM: XIP is off while programming */
-static int32_t  wc_blk = -1;
-static bool     wc_dirty, wc_failed;
+static uint8_t  wc_buf[WC_SLOTS][FLASH_SECTOR_SIZE];   /* RAM: XIP is off while programming */
+static int32_t  wc_blk[WC_SLOTS] = { -1, -1, -1, -1 };
+static bool     wc_dirty[WC_SLOTS], wc_failed;
+static uint32_t wc_used[WC_SLOTS], wc_tick;            /* least recently used goes */
 
 static void wc_commit_cb(void *p)
 {
-    (void)p;
-    uint32_t off = DISK_FLASH_OFFSET + (uint32_t)wc_blk * FLASH_SECTOR_SIZE;
+    int k = (int)(intptr_t)p;
+    uint32_t off = DISK_FLASH_OFFSET + (uint32_t)wc_blk[k] * FLASH_SECTOR_SIZE;
     flash_range_erase(off, FLASH_SECTOR_SIZE);
-    flash_range_program(off, wc_buf, FLASH_SECTOR_SIZE);
+    flash_range_program(off, wc_buf[k], FLASH_SECTOR_SIZE);
 }
 
+static void wc_flush_slot(int k)
+{
+    if (wc_blk[k] < 0 || !wc_dirty[k]) return;
+    wc_dirty[k] = false;
+    if (flash_safe_execute(wc_commit_cb, (void *)(intptr_t)k, 1000) != PICO_OK) wc_failed = true;
+}
+
+/* everything to flash, highest block first; then forget the cache */
 static void wc_flush(void)
 {
-    if (wc_blk < 0 || !wc_dirty) return;
-    wc_dirty = false;
-    if (flash_safe_execute(wc_commit_cb, NULL, 1000) != PICO_OK) wc_failed = true;
+    for (;;) {
+        int hi = -1;
+        for (int k = 0; k < WC_SLOTS; k++)
+            if (wc_blk[k] >= 0 && wc_dirty[k] && (hi < 0 || wc_blk[k] > wc_blk[hi])) hi = k;
+        if (hi < 0) break;
+        wc_flush_slot(hi);
+    }
+    for (int k = 0; k < WC_SLOTS; k++) wc_blk[k] = -1;
+}
+
+static int wc_find(uint32_t blk)
+{
+    for (int k = 0; k < WC_SLOTS; k++) if (wc_blk[k] == (int32_t)blk) return k;
+    return -1;
 }
 
 static const uint8_t *flash_sector(uint32_t lba)
 {
-    if ((int32_t)(lba / 8u) == wc_blk) return wc_buf + (lba % 8u) * 512u;
+    int k = wc_find(lba / 8u);
+    if (k >= 0) return wc_buf[k] + (lba % 8u) * 512u;
     return (const uint8_t *)(XIP_BASE + DISK_FLASH_OFFSET + lba * 512u);
 }
 
 static uint8_t *flash_sector_rw(uint32_t lba)
 {
     uint32_t blk = lba / 8u;
-    if ((int32_t)blk != wc_blk) {
-        wc_flush();
-        memcpy(wc_buf, (const void *)(XIP_BASE + DISK_FLASH_OFFSET + blk * FLASH_SECTOR_SIZE),
+    int k = wc_find(blk);
+    if (k < 0) {
+        k = 0;
+        for (int i = 1; i < WC_SLOTS; i++) if (wc_used[i] < wc_used[k]) k = i;
+        wc_flush_slot(k);
+        memcpy(wc_buf[k], (const void *)(XIP_BASE + DISK_FLASH_OFFSET + blk * FLASH_SECTOR_SIZE),
                FLASH_SECTOR_SIZE);
-        wc_blk = (int32_t)blk;
+        wc_blk[k] = (int32_t)blk;
     }
-    wc_dirty = true;
-    return wc_buf + (lba % 8u) * 512u;
+    wc_used[k] = ++wc_tick;
+    wc_dirty[k] = true;
+    return wc_buf[k] + (lba % 8u) * 512u;
 }
 
 /* ---------------- a FAT volume: the flash disk or the built-in image ---------------- */
@@ -254,6 +288,5 @@ int sysfiles_sync(const uint8_t *image, bool restore_missing)
         written++;
     }
     wc_flush();
-    wc_blk = -1;
     return wc_failed ? -1 : written;
 }

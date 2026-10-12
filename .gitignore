@@ -21,3 +21,5 @@ atari/install/*.o
 atari/install/payload.c
 atari/install/STINGINS.TOS
 atari/sting/PORTINFO.PRG
+atari/tools/*.o
+atari/tools/NETCLOCK.PRG

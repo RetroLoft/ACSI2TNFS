@@ -404,6 +404,7 @@ static unsigned char sv_sub;
 static int sv_write;
 
 static long sv_find(void) { return sv_result = acsi_find(); }
+static long sv_hz(void) { return (long)*(volatile uint32 *)0x4baL; }   /* 200 Hz counter */
 
 static long sv_cmd(void)
 {
@@ -503,15 +504,29 @@ void _init(BASEPAGE *bp)
         quit("ACSI2TNFS firmware without network function, not installed\n");
     if (!(get16(txbuf + 6) & 0x0002)) {
         /* the adapter may still be joining Wi-Fi after power-on: our boot
-           driver waits for that, HDDRIVER does not. About 30 s. */
-        int t, f;
-        say(DRIVER_NAME ": waiting for the adapter's Wi-Fi (key: skip)");
-        for (t = 0; t < 60; t++) {
-            for (f = 0; f < 25; f++) Vsync();
-            say(".");
-            if (Bconstat(2)) { Bconin(2); break; }
+           driver waits for that, HDDRIVER does not. 30 s, counted down. */
+        uint32 t0 = (uint32)Supexec(sv_hz);
+        int shown = -1;
+        say(DRIVER_NAME ": waiting for the adapter's Wi-Fi (ESC: skip) ");
+        for (;;) {
+            int left = 30 - (int)(((uint32)Supexec(sv_hz) - t0) / 200);
+            if (left <= 0) break;
+            if (left != shown) {
+                char n[3];
+                if (shown >= 0) say("\b\b");
+                n[0] = (char)('0' + left / 10);
+                n[1] = (char)('0' + left % 10);
+                n[2] = '\0';
+                say(n);
+                shown = left;
+            }
+            if (Bconstat(2) && (Bconin(2) & 0xff) == 27) break;
             if (cmd(NET_INFO, 0) == ST_OK && same(txbuf, "ATN", 3) && (get16(txbuf + 6) & 0x0002))
                 break;
+            {
+                uint32 until = (uint32)Supexec(sv_hz) + 50;    /* 0.25 s */
+                while ((uint32)Supexec(sv_hz) < until) ;
+            }
         }
         say("\n");
         if (!same(txbuf, "ATN", 3) || !(get16(txbuf + 6) & 0x0002))

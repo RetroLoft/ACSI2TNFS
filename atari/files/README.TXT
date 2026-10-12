@@ -31,7 +31,7 @@ Showing drive C: on the desktop
 
 MEGA STE AND TT: SET THE ACSI ID TO THE FIRST FREE ONE!
   A new adapter uses ID 6: a Mega STE or a TT does not see it.
-  - TT: ID 0 (TOS 3.06 only asks ID 0; its own disk is SCSI).
+  - TT: ID 0 (with AHDI only ID 0 was asked; its disk is SCSI).
   - Mega STE: ID 1 (the internal disk adapter is on ID 0);
     with HDDRIVER also switch ID 1 on in HDDRUTIL.
 

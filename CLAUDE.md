@@ -66,7 +66,7 @@ first. The old `build/` folder (if present) is an RP2040 build: don't use it.
   TOS 1.02/1.04, 2.06, 3.06 and EmuTOS work (EmuTOS uses its own ACSI driver, not ours).
 - **Other drivers and machines:** HDDRIVER (Mega STE) assigns all letters itself, does
   not wait for the network at boot and only scans the ids enabled in HDDRUTIL; the TT
-  (TOS 3.06) only asks ACSI id 0. Sniffer mode (`s`) shows which ids a machine asks.
+  (TOS 3.06 with AHDI) only asked ACSI id 0. Both work with the adapter. Sniffer mode (`s`) shows which ids a machine asks.
 - **The floppy shares the ACSI data bus and /IRQ (MFP GPIP5).** Anything on the ACSI side
   can break the floppy. Two real bugs: pull-ups on /IRQ and /DRQ to the board's own 5 V
   (removed), and ACSI_NET.STX taking `flock` with TAS on the high byte only (fixed in
@@ -98,7 +98,7 @@ first. The old `build/` folder (if present) is an RP2040 build: don't use it.
 - `main` (not pushed since 2026-10-11): C: as FAT16; TNFS lazy loading with READDIRX,
   NET_WAIT.TXT while connecting; Wi-Fi power saving off; ACSI_NET.STX 00.08 and
   STINGINS.TOS (STinG without XControl); ST-RAM builds for the TT. Tested on the Mega STE
-  (TOS 2.06, HDDRIVER, adapter on ACSI id 1) and the TT (TOS 3.06, ACSI id 0), and with
+  (TOS 2.06, HDDRIVER, adapter on ACSI id 1) and the TT (TOS 3.06, AHDI, ACSI id 0), and with
   TOS 1.02, 1.04 and EmuTOS. Firmware still uses the pin map of the old **dev board**
   (data GP8-GP15, /OE GP6, DIR GP7, /IRQ and /DRQ through BC547s, high = active).
 - `v2` (pushed, not merged into main): KiCad projects `hardware/v2` (DB19 on the board)
@@ -107,6 +107,8 @@ first. The old `build/` folder (if present) is an RP2040 build: don't use it.
   until the firmware supports that pin map. No gerbers yet (Frank uses the KiCad plugin
   Fabrication Toolkit for JLCPCB).
 - `acsi-net`: merged into main, kept for history.
+- The time zone is a fixed UTC offset (ACSITNFS.PRG), no automatic summer time: Frank's
+  choice.
 - Sibling repos (same parent folder): `atari-net-tools` (URLVIEW.TTP: view, `-n` speed
   test, `-o` save to file) and `SideTNFS-Config` (ACSITNFS.PRG, branch `acsi-transport`,
   not merged; its build still has TT-RAM program flags: patched on C: only).

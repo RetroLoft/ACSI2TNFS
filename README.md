@@ -16,15 +16,15 @@ No software to install for the disk part: the adapter brings its own driver. A G
 program, **ACSITNFS.PRG**, sets up Wi-Fi, network drives, clock and the ACSI id.
 
 > Status: working on real hardware: ST with TOS 1.02/1.04, Mega STE (TOS 2.06, HDDRIVER),
-> TT (TOS 3.06) and EmuTOS. The network function (STinG) is new and still being refined.
+> TT (TOS 3.06, AHDI) and EmuTOS. The network function (STinG) is new and still being refined.
 
 > [!IMPORTANT]
 > ## MEGA STE AND TT: SET THE ADAPTER TO THE FIRST FREE ACSI ID
 >
 > **A new adapter uses ACSI id 6. On a Mega STE or a TT the machine does not see it there.**
 >
-> - **TT:** TOS 3.06 only asks ACSI id **0** at start-up. Its own hard disk is SCSI, so
->   use **id 0**.
+> - **TT** (tested with AHDI): only ACSI id **0** is asked at start-up. Its own hard disk
+>   is SCSI, so use **id 0**.
 > - **Mega STE:** the internal hard disk adapter is on id 0, so use **id 1**. With
 >   HDDRIVER also switch id 1 on in HDDRUTIL.
 > - In general: the lowest id that no other device on the ACSI port uses.

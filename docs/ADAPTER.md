@@ -10,7 +10,7 @@ Megafile or an UltraSatan usually sits on 0.
 
 | Machine | Id | Why |
 |---|---|---|
-| TT (TOS 3.06) | **0** | TOS only asks id 0 at start-up; the TT's own disk is SCSI |
+| TT (TOS 3.06, AHDI) | **0** | only id 0 was asked at start-up; the TT's own disk is SCSI |
 | Mega STE | **1** | the internal hard disk adapter is on id 0; with HDDRIVER switch id 1 on in HDDRUTIL |
 | ST, STE, Mega ST | 6 (or any free id) | our boot code and AHDI/HDDRIVER ask every id |
 

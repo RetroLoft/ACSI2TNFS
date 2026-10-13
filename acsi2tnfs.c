@@ -394,6 +394,31 @@ static void console(int ch)
         }
         break;
     }
+    case 'c': sd_console_test(); break;
+    case 'o': {
+        /* /OE (GP6) and DIR (GP7) of U1 as after a reset or in BOOTSEL: input with
+           the internal pull-down. A 10k pull-up on /OE (R8) must win, so U1 is off
+           while the Pico does not run. A few us; use it while the Atari is idle. */
+        bool pd6 = gpio_is_pulled_down(PIN_OE), pu6 = gpio_is_pulled_up(PIN_OE);
+        bool pd7 = gpio_is_pulled_down(PIN_DIR), pu7 = gpio_is_pulled_up(PIN_DIR);
+        uint32_t irq = save_and_disable_interrupts();
+        gpio_set_pulls(PIN_OE, false, true);
+        gpio_set_pulls(PIN_DIR, false, true);
+        gpio_set_dir(PIN_OE, GPIO_IN);
+        gpio_set_dir(PIN_DIR, GPIO_IN);
+        busy_wait_us_32(20);
+        bool oe = gpio_get(PIN_OE), dir = gpio_get(PIN_DIR);
+        gpio_set_dir(PIN_OE, GPIO_OUT);             /* the output values were kept */
+        gpio_set_dir(PIN_DIR, GPIO_OUT);
+        gpio_set_pulls(PIN_OE, pu6, pd6);
+        gpio_set_pulls(PIN_DIR, pu7, pd7);
+        restore_interrupts(irq);
+        printf("as after a reset: /OE %s, DIR %s\n",
+               oe ? "high: U1 off, the Atari's bus is free (pull-up R8 ok)"
+                  : "LOW: U1 on, it drives the Atari's bus (no pull-up on /OE)",
+               dir ? "high" : "low (does not matter while /OE is high)");
+        break;
+    }
     case 'B': printf("rebooting to BOOTSEL\n"); sleep_ms(100); reset_usb_boot(0, 0); break;
     case 'h': case '?': help(); break;
     default:

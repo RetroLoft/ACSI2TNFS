@@ -119,6 +119,30 @@ bool sd_read(uint32_t lba, uint8_t *buf)
     return ok;
 }
 
+/* wait until the card is no longer busy (DO high) */
+static bool sd_ready(uint32_t ms)
+{
+    absolute_time_t until = make_timeout_time_ms(ms);
+    while (xfer(0xff) != 0xff)
+        if (time_reached(until)) return false;
+    return true;
+}
+
+bool sd_write(uint32_t lba, const uint8_t *buf)
+{
+    cs(true);
+    bool ok = cmd(24, sd_hc ? lba : lba * 512u, 0x01) == 0x00;     /* WRITE_BLOCK */
+    if (ok) {
+        xfer(0xff);
+        xfer(0xfe);                                     /* start token */
+        spi_write_blocking(SD_SPI, buf, 512);
+        xfer(0xff); xfer(0xff);                         /* CRC, not checked */
+        ok = (xfer(0xff) & 0x1f) == 0x05 && sd_ready(500);   /* data accepted, then busy */
+    }
+    cs(false);
+    return ok;
+}
+
 static bool sd_reg(uint8_t c, uint8_t *reg16)
 {
     cs(true);
@@ -206,8 +230,10 @@ DRESULT disk_read(BYTE pdrv, BYTE *buff, LBA_t sector, UINT count)
 
 DRESULT disk_write(BYTE pdrv, const BYTE *buff, LBA_t sector, UINT count)
 {
-    (void)pdrv; (void)buff; (void)sector; (void)count;
-    return RES_WRPRT;                           /* phase 1: the SD drive is read-only */
+    if (pdrv || (sd_stat & STA_NOINIT)) return RES_NOTRDY;
+    for (UINT i = 0; i < count; i++)
+        if (!sd_write((uint32_t)sector + i, buff + i * 512u)) return RES_ERROR;
+    return RES_OK;
 }
 
 DRESULT disk_ioctl(BYTE pdrv, BYTE cmd, void *buff)

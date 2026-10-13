@@ -308,3 +308,9 @@ Twee functies, allebei met de kaart als **optie**: zonder kaart werkt alles zoal
 - Schrijven naar de SD-drive: geweigerd (WRITE(6) met sense 0x03), zoals bedoeld in fase 1.
 - Kaart eruit, `N`, reset: E: toont `SD_ERR.TXT` ("no SD card, or not FAT32/exFAT"); de TNFS-drives werken door. Kaart terug, `N`: de drive is er weer.
 - Nog niet getest: zonder Wi-Fi opstarten, exFAT-kaart, onder HDDRIVER.
+
+**Fase 2: testverslag (14 oktober 2026, ST met onze driver)**
+
+- Schrijven naar de SD-drive (E:, `/hd`): bestand naar de root en naar een submap, nieuwe map, bestand daarin, hernoemen, wissen. `vsync` zet het binnen 12-78 ms op de kaart (`write /TEST2/RUNME.TOS, 5090 bytes ok`, `mkdir`, `rename`, `delete`); 4 resets daarna, alles bleef staan. "Perfect en snel" (Frank).
+- Hoe: een laag `fs_*` (open, seek, read, write, close, mkdir/unlink/rmdir, rename) onder het tijdelijke sectorbestand, `vbuild` en `vsync`, per drive naar TNFS of FatFs. Het tijdelijke bestand van een SD-drive is `.A2T.TMP` in de map van de drive. Bestanden krijgen de netwerktijd (`get_fattime`).
+- Nog te doen: de kaart op de pc controleren; TNFS-schrijven opnieuw testen (de enige schrijfbare TNFS-drive, de LAN-drive, is nu de SD-drive geworden).

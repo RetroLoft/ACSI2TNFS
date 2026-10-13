@@ -217,6 +217,19 @@ void net_clock(uint8_t *out)
     out[10] = (uint8_t)(sec % 60);
 }
 
+/* FatFs: time stamps of what is written to the SD card: the network time
+   (local), or 1 January 2026 while there is none */
+#include "third_party/fatfs/ff.h"
+DWORD get_fattime(void)
+{
+    uint8_t c[16];
+    net_clock(c);
+    if (c[3] != CLK_VALID) return (DWORD)(2026 - 1980) << 25 | 1u << 21 | 1u << 16;
+    uint32_t y = (uint32_t)c[4] << 8 | c[5];
+    return (DWORD)(y - 1980) << 25 | (DWORD)c[6] << 21 | (DWORD)c[7] << 16 |
+           (DWORD)c[8] << 11 | (DWORD)c[9] << 5 | (DWORD)(c[10] / 2);
+}
+
 /* console K: network clock on/off (stored; active from the next Pico start) */
 void net_clock_toggle(void)
 {
@@ -1308,6 +1321,7 @@ static bool vdir_load(uint16_t dir)
 
 static void vfile_close(void);
 static void tnfs_close(uint8_t h);
+static void fs_close(uint8_t h);
 
 /* the current drive's tree from scratch: only the root (after mounting and
    at every Atari reset); folders follow when the Atari reads them */
@@ -1316,7 +1330,7 @@ static void vfat_scan(void)
     vdrive_t *d = cur;
     d->ready = false;
     vfile_close();
-    if (d->tmp_open && d->mounted) tnfs_close(d->tmp_handle);
+    if (d->tmp_open && (d->sd || d->mounted)) fs_close(d->tmp_handle);
     d->tmp_open = d->tmp_used = d->wr_pending = false;
     d->files = d->dirs = d->skipped = 0;
     uint16_t r = d->root;
@@ -1527,27 +1541,122 @@ static bool tnfs_rename(const char *from, const char *to)
     return n >= 5 && rx[4] == 0;
 }
 
+/* ---------------- file operations on the current drive: TNFS or SD ----------------
+ * The write side (the hidden sector file, vbuild, vsync) goes through these.
+ * On an SD drive they are FatFs calls, with paths relative to the drive's
+ * folder on the card; handles 1..SD_FILES index sd_fil[].
+ */
+#define SD_FILES 4
+
+static FIL     sd_fil[SD_FILES];
+static bool    sd_fil_used[SD_FILES];
+static FRESULT sd_err;
+
+static const char *fs_err(void)
+{
+    static char b[20];
+    if (!cur->sd) return tnfs_err(rx[4]);
+    snprintf(b, sizeof b, "FatFs error %d", (int)sd_err);
+    return b;
+}
+
+static FIL *sd_h(uint8_t h) { return h >= 1 && h <= SD_FILES ? &sd_fil[h - 1] : NULL; }
+
+static bool fs_open(const char *path, uint16_t flags, uint8_t *h)
+{
+    static char full[300];
+    if (!cur->sd) return tnfs_open(path, flags, h);
+    int k = 0;
+    while (k < SD_FILES && sd_fil_used[k]) k++;
+    if (k == SD_FILES) { sd_err = FR_TOO_MANY_OPEN_FILES; return false; }
+    sd_full(full, sizeof full, path);
+    BYTE mode = (flags & TO_RDWR) == TO_RDWR ? FA_READ | FA_WRITE : FA_WRITE;
+    mode |= (flags & TO_TRUNC) ? FA_CREATE_ALWAYS : (flags & TO_CREAT) ? FA_OPEN_ALWAYS : FA_OPEN_EXISTING;
+    if ((sd_err = f_open(&sd_fil[k], full, mode)) != FR_OK) return false;
+    sd_fil_used[k] = true;
+    *h = (uint8_t)(k + 1);
+    return true;
+}
+
+static bool fs_seek(uint8_t h, uint32_t off)
+{
+    if (!cur->sd) return tnfs_seek(h, off);
+    FIL *f = sd_h(h);
+    return f && (sd_err = f_lseek(f, off)) == FR_OK;
+}
+
+static bool fs_write(uint8_t h, const uint8_t *buf, uint16_t len)
+{
+    if (!cur->sd) return tnfs_write(h, buf, len);
+    FIL *f = sd_h(h);
+    UINT n = 0;
+    return f && (sd_err = f_write(f, buf, len, &n)) == FR_OK && n == len;
+}
+
+/* up to 512 bytes; *got = bytes read (0 at the end) */
+static bool fs_read(uint8_t h, uint8_t *buf, uint16_t len, uint16_t *got)
+{
+    if (!cur->sd) {
+        uint8_t req[3] = { h, (uint8_t)(len & 0xff), (uint8_t)(len >> 8) };
+        int n = tnfs_req(0x21, req, 3);                     /* READ */
+        if (n < 7 || rx[4] != 0) return false;
+        uint16_t g = le16(rx + 5);
+        if (g > len || g > n - 7) return false;
+        memcpy(buf, rx + 7, g);
+        *got = g;
+        return true;
+    }
+    FIL *f = sd_h(h);
+    UINT n = 0;
+    if (!f || (sd_err = f_read(f, buf, len, &n)) != FR_OK) return false;
+    *got = (uint16_t)n;
+    return true;
+}
+
+static void fs_close(uint8_t h)
+{
+    if (!cur->sd) { tnfs_close(h); return; }
+    FIL *f = sd_h(h);
+    if (!f) return;
+    f_close(f);
+    sd_fil_used[h - 1] = false;
+}
+
+/* 0x26 UNLINK, 0x13 MKDIR, 0x14 RMDIR */
+static bool fs_path(uint8_t cmd, const char *path)
+{
+    static char full[300];
+    if (!cur->sd) return tnfs_path(cmd, path);
+    sd_full(full, sizeof full, path);
+    sd_err = cmd == 0x13 ? f_mkdir(full) : f_unlink(full);  /* f_unlink: files and empty folders */
+    return sd_err == FR_OK;
+}
+
+static bool fs_rename(const char *from, const char *to)
+{
+    static char a[300], b[300];
+    if (!cur->sd) return tnfs_rename(from, to);
+    sd_full(a, sizeof a, from);
+    sd_full(b, sizeof b, to);
+    return (sd_err = f_rename(a, b)) == FR_OK;
+}
+
 /* one sector of TMP_NAME */
 static bool tmp_io1(uint32_t rel, uint8_t *buf, bool write)
 {
     vdrive_t *d = cur;
     if (!d->tmp_open) {
         uint16_t fl = TO_RDWR | TO_CREAT | (d->tmp_used ? 0 : TO_TRUNC);
-        if (!tnfs_open(TMP_NAME, fl, &d->tmp_handle)) {
-            printf("net: cannot create %s: %s (0x%02x)\n", TMP_NAME, tnfs_err(rx[4]), rx[4]);
+        if (!fs_open(TMP_NAME, fl, &d->tmp_handle)) {
+            printf("net: cannot create %s: %s\n", TMP_NAME, fs_err());
             return false;
         }
         d->tmp_open = d->tmp_used = true;
     }
-    if (!tnfs_seek(d->tmp_handle, rel * 512u)) return false;
-    if (write) return tnfs_write(d->tmp_handle, buf, 512);
-    uint8_t req[3] = { d->tmp_handle, 0x00, 0x02 };        /* 512 bytes */
-    int n = tnfs_req(0x21, req, 3);
-    if (n < 7 || rx[4] != 0) return false;
-    uint16_t got = le16(rx + 5);
-    if (got > 512 || got > n - 7) return false;
-    memcpy(buf, rx + 7, got);
-    return true;
+    if (!fs_seek(d->tmp_handle, rel * 512u)) return false;
+    if (write) return fs_write(d->tmp_handle, buf, 512);
+    uint16_t got;
+    return fs_read(d->tmp_handle, buf, 512, &got);
 }
 
 static bool tmp_io(uint32_t rel, uint8_t *buf, bool write)
@@ -1562,7 +1671,6 @@ static bool vfat_write(uint32_t rel, const uint8_t *buf)
     vdrive_t *d = cur;
     int k = (int)(d - vd);
     if (rel == 0) return true;                              /* boot sector: fixed */
-    if (d->sd) return false;                                /* SD drive: read-only (phase 1) */
     if (!d->ready || !tmp_io(rel, (uint8_t *)buf, true)) return false;
     wbits[k][rel >> 3] |= (uint8_t)(1u << (rel & 7));
     dbits[k][rel >> 3] |= (uint8_t)(1u << (rel & 7));
@@ -1805,6 +1913,7 @@ static bool vbuild(uint16_t n, uint32_t c, uint32_t size)
     static uint8_t sec[512];
     const uint8_t *wb = wbits[cur - vd];
     vpath(n, path, sizeof path);
+    vfile_close();                          /* the read cache may have this file open */
 
     bool direct = true;
     uint32_t left = size, cc = c;
@@ -1820,8 +1929,8 @@ static bool vbuild(uint16_t n, uint32_t c, uint32_t size)
         snprintf(tmp + k, sizeof tmp - (size_t)k, "%s.A2T.NEW", k > 1 ? "/" : "");
     }
     uint8_t h;
-    if (!tnfs_open(tmp, TO_WRONLY | TO_CREAT | TO_TRUNC, &h)) {
-        printf("sync: cannot create %s: %s (0x%02x)\n", tmp, tnfs_err(rx[4]), rx[4]);
+    if (!fs_open(tmp, TO_WRONLY | TO_CREAT | TO_TRUNC, &h)) {
+        printf("sync: cannot create %s: %s\n", tmp, fs_err());
         return false;
     }
     bool ok = true;
@@ -1829,16 +1938,16 @@ static bool vbuild(uint16_t n, uint32_t c, uint32_t size)
     for (uint32_t i = 0; ok && left && valid_cl(cc) && i < V_NCL; i++, cc = vfat_get(cc))
         for (uint32_t s = 0; ok && s < V_SPC && left; s++) {
             uint16_t len = left > 512 ? 512 : (uint16_t)left;
-            ok = vfat_sector(V_DATREC + (cc - 2) * V_SPC + s, sec) && tnfs_write(h, sec, len);
+            ok = vfat_sector(V_DATREC + (cc - 2) * V_SPC + s, sec) && fs_write(h, sec, len);
             left -= len;
             vreq_service();
         }
-    tnfs_close(h);
+    fs_close(h);
     if (left) ok = false;                                   /* FAT not complete (yet) */
     if (ok && !direct) {
         vfile_close();
-        tnfs_path(0x26, path);                              /* old version, if any */
-        ok = tnfs_rename(tmp, path);
+        fs_path(0x26, path);                                /* old version, if any */
+        ok = fs_rename(tmp, path);
     }
     return ok;
 }
@@ -1865,8 +1974,8 @@ static void vsync_entry(uint16_t dir, const uint8_t *e, uint16_t *queue, int *nq
             vpath(i, path, sizeof path);
             child_path(dir, n83, path2, sizeof path2);
             vfile_close();
-            bool ok = tnfs_rename(path, path2);
-            printf("sync: rename %s -> %s %s\n", path, path2, ok ? "ok" : tnfs_err(rx[4]));
+            bool ok = fs_rename(path, path2);
+            printf("sync: rename %s -> %s %s\n", path, path2, ok ? "ok" : fs_err());
             (*acts)++;
             if (ok && vnode_place(i, dir, n83)) n = i;
         }
@@ -1875,8 +1984,8 @@ static void vsync_entry(uint16_t dir, const uint8_t *e, uint16_t *queue, int *nq
         if (n < 0) { printf("sync: no room for %.11s\n", n83); return; }
         if (isdir) {
             vpath((uint16_t)n, path, sizeof path);
-            bool ok = tnfs_path(0x13, path);
-            printf("sync: mkdir %s %s\n", path, ok ? "ok" : tnfs_err(rx[4]));
+            bool ok = fs_path(0x13, path);
+            printf("sync: mkdir %s %s\n", path, ok ? "ok" : fs_err());
             (*acts)++;
         }
     }
@@ -1958,8 +2067,8 @@ static void vsync(void)
         if (v->flags & (VF_SEEN | VF_DEL | VF_HIDE)) continue;
         vpath((uint16_t)i, path, sizeof path);
         vfile_close();
-        bool ok = tnfs_path(v->isdir ? 0x14 : 0x26, path);
-        printf("sync: %s %s %s\n", v->isdir ? "rmdir" : "delete", path, ok ? "ok" : tnfs_err(rx[4]));
+        bool ok = fs_path(v->isdir ? 0x14 : 0x26, path);
+        printf("sync: %s %s %s\n", v->isdir ? "rmdir" : "delete", path, ok ? "ok" : fs_err());
         v->flags |= VF_DEL;
         acts++;
         vreq_service();
@@ -1970,7 +2079,7 @@ static void vsync(void)
         d->wr_pending = true;
         d->last_wr_ms = to_ms_since_boot(get_absolute_time());
     }
-    printf("sync: TNFS %d, %d change(s), %lu ms\n", (int)(d - vd) + 1, acts,
+    printf("sync: %s %d, %d change(s), %lu ms\n", d->sd ? "SD" : "TNFS", (int)(d - vd) + 1, acts,
            (unsigned long)(to_ms_since_boot(get_absolute_time()) - t0));
 }
 
@@ -1981,7 +2090,7 @@ static void drives_down(void)
         cur = &vd[i];
         cur->ready = false;
         vfile_close();
-        if (cur->tmp_open && cur->mounted) tnfs_close(cur->tmp_handle);
+        if (cur->tmp_open && (cur->sd || cur->mounted)) fs_close(cur->tmp_handle);
         cur->tmp_open = false;
         tnfs_unmount();
     }

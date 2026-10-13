@@ -130,7 +130,9 @@ static uint32_t validate_drive(const set_drive_t *d, int index)
     if (d->state == DRV_EMPTY) return ST_OK;
     if (d->letter < 'C' || d->letter > 'P') return ST_INVALID_DRIVE_LETTER;  /* TOS: 16 drives */
     if (letter_used(&g_stage, d->letter, index)) return ST_DUPLICATE_DRIVE_LETTER;
-    if (d->type != DRV_TYPE_TNFS) return ST_INVALID_TYPE;        /* no SD card support (yet) */
+    if (d->type == DRV_TYPE_SD)                                 /* a folder on the card */
+        return d->sd_path[0] == '/' ? ST_OK : ST_INVALID_SD_PATH;
+    if (d->type != DRV_TYPE_TNFS) return ST_INVALID_TYPE;
     if (d->transport > DRV_TCP) return ST_INVALID_TRANSPORT;
     if (!d->port) return ST_INVALID_PORT;
     if (!d->host[0]) return ST_INVALID_HOST;

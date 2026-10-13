@@ -271,3 +271,32 @@ Nu leest de Pico na het mounten de hele boom in en geeft elk bestand en elke map
 - Onder HDDRIVER laadt onze driver niet en zet niemand de klok. NETCLOCK.PRG (in AUTO) vraagt de netwerktijd aan de adapter (vendor sub 9, als de driver), wacht per stap tot 30 s op Wi-Fi en de tijdserver met een aftelling (ESC slaat over) en zet `Tsetdate`, `Tsettime` en `Settime`. Getest: de klok staat goed, met de UTC-afwijking die de Pico toepast.
 - ACSI_NET.STX telt nu ook af bij het wachten op Wi-Fi, in plaats van puntjes.
 - De UTC-afwijking is vast (`+1`): zomer- en wintertijd past de firmware niet zelf toe. Op 12 oktober is het in Amsterdam UTC+2.
+
+## Ontwerp: de SD-kaart (drive en schrijfcache)
+
+Twee functies, allebei met de kaart als **optie**: zonder kaart werkt alles zoals nu.
+
+1. **SD-drive:** in ACSITNFS.PRG → *Drives* een drive van het type SD met een map, bv. `/hd`. De drive toont de inhoud van die map op de kaart (op de pc geformatteerd: FAT32, of exFAT bij kaarten vanaf 64 GB).
+2. **Schrijfcache voor TNFS:** wat de Atari naar een TNFS-drive schrijft, gaat nu sector voor sector als TNFS-WRITE naar het verborgen bestand `/.A2T.TMP` op de server, en de Atari wacht op elk antwoord. Met een kaart gaan die sectoren naar een bestand op de kaart (map `/.A2TCACHE`, één bestand per drive); `vsync` leest ze daar terug en zet de bestanden op de server, op de achtergrond. Geen kaart of geen ruimte: terug naar het bestand op de server, zoals nu.
+
+**Wat er al is:** `sdcard.c` (init in SPI-modus, een blok lezen, CID/CSD; getest met een 32 GB FAT32-kaart op 12 MHz); de instellingen kennen `DRV_TYPE_SD` met `sd_path`, het configuratieprotocol draagt ze over. `config.c` weigert een SD-drive nog. Of het scherm *Drives* van ACSITNFS.PRG het type SD al aanbiedt: nagaan in SideTNFS-Config (staat niet op deze PC).
+
+**Opbouw**
+
+- **Bloklaag:** `sd_read`/`sd_write`, ook voor meerdere blokken achter elkaar (CMD18/CMD25: veel sneller dan blok voor blok).
+- **FatFs** (ChaN, BSD-achtige licentie) in `third_party/fatfs`: lange namen aan (de Atari ziet ze als 8.3 via `make83`, zoals bij TNFS), exFAT aan.
+- **Een bron onder de virtuele FAT:** alles wat nu TNFS-verzoeken doet (map lezen, bestand lezen, schrijven, mkdir/rmdir/unlink/rename, het tijdelijke sectorbestand) gaat via een klein stel functies per drive, met twee uitvoeringen: TNFS en SD (FatFs). Lazy loading, de FAT-regel, reset = opnieuw vanaf de root en `vsync` blijven zoals ze zijn.
+- **SD-drive zonder Wi-Fi:** een SD-drive wordt bij het opstarten meteen ingelezen, ook als er geen Wi-Fi is. Geen kaart: de drive toont `SD_ERR.TXT` met de reden (zoals `NET_ERR.TXT`).
+- **Drives:** C: plus maximaal 3 virtuele drives, TNFS en SD door elkaar (4 regels in de rootsector).
+
+**Grenzen**
+
+- 16 MB per drive per sessie, als bij TNFS (lazy loading).
+- Kaart wisselen terwijl de Atari draait: niet in de eerste fases (herstart nodig).
+- De schrijfcache geldt per sessie: valt de stroom weg voordat `vsync` klaar is, dan is het niet gesynchroniseerde deel weg (nu ook: het bestand op de server wordt niet opnieuw afgespeeld).
+
+**Fases**
+
+1. Bloklaag, FatFs en de SD-drive **alleen lezen**; `config.c` accepteert SD. Test: drive `/hd` tonen, programma's starten, met en zonder kaart, ook zonder Wi-Fi.
+2. **Schrijven** naar de SD-drive (het tijdelijke sectorbestand op de kaart, `vsync` naar de map op de kaart).
+3. **Schrijfcache voor TNFS** op de kaart, met terugval naar de server.

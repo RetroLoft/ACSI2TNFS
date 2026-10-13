@@ -300,3 +300,11 @@ Twee functies, allebei met de kaart als **optie**: zonder kaart werkt alles zoal
 1. Bloklaag, FatFs en de SD-drive **alleen lezen**; `config.c` accepteert SD. Test: drive `/hd` tonen, programma's starten, met en zonder kaart, ook zonder Wi-Fi.
 2. **Schrijven** naar de SD-drive (het tijdelijke sectorbestand op de kaart, `vsync` naar de map op de kaart).
 3. **Schrijfcache voor TNFS** op de kaart, met terugval naar de server.
+
+**Fase 1: testverslag (14 oktober 2026, ST met onze driver, dev-print)**
+
+- 32 GB SDHC-kaart, FAT32 van de pc, map `/hd` als SD-drive (E:) naast twee TNFS-drives. Bij het opstarten eerst de kaart (FatFs), dan Wi-Fi en TNFS. Console `n`: "SD 3: /hd, OK! SD card, FAT32: root 4 files, 12 dirs".
+- Lezen: mappen lazy ingelezen (`GAMES/1` met 40 entries, `KOPIEER/PROCOPY`), programma's starten, zonder fouten.
+- Schrijven naar de SD-drive: geweigerd (WRITE(6) met sense 0x03), zoals bedoeld in fase 1.
+- Kaart eruit, `N`, reset: E: toont `SD_ERR.TXT` ("no SD card, or not FAT32/exFAT"); de TNFS-drives werken door. Kaart terug, `N`: de drive is er weer.
+- Nog niet getest: zonder Wi-Fi opstarten, exFAT-kaart, onder HDDRIVER.

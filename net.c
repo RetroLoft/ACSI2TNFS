@@ -332,6 +332,7 @@ uint32_t net_status_text(char *p, uint32_t max)
 #include "lwip/dhcp.h"
 #include "lwip/ip_addr.h"
 #include "lwip/netif.h"
+#include "third_party/fatfs/ff.h"
 
 static bool wifi_inited;
 static void net_sleep_ms(uint32_t ms);
@@ -450,6 +451,8 @@ typedef struct {
     uint16_t port;
     bool     prefer_tcp;
     bool     no_dirx;               /* server has no OPENDIRX/READDIRX       */
+    bool     sd;                    /* a folder on the SD card (path), not TNFS */
+    FIL      vf_fil;                /* SD: the open file of the file cache   */
     /* connection */
     ip_addr_t ip;
     bool     use_tcp, mounted;
@@ -494,7 +497,14 @@ static vdrive_t *cur;
 /* drive d is not ready yet: NET_WAIT.TXT tells why it is empty */
 static void vdrive_wait(vdrive_t *d)
 {
-    int n = snprintf(d->errtxt, sizeof d->errtxt,
+    int n = d->sd ? snprintf(d->errtxt, sizeof d->errtxt,
+                     "ACSI2TNFS: SD card drive not ready yet\r\n"
+                     "\r\n"
+                     "Folder : %s\r\n"
+                     "\r\n"
+                     "The adapter is still reading the SD card. Close this\r\n"
+                     "window and open the drive again in a moment.\r\n", d->path)
+                  : snprintf(d->errtxt, sizeof d->errtxt,
                      "ACSI2TNFS: network drive not ready yet\r\n"
                      "\r\n"
                      "Server : %s:%u\r\n"
@@ -512,13 +522,21 @@ static void drives_from_settings(void)
     nvd = 0;
     for (int i = 0; i < SET_MAX_DRIVES && nvd < VDRIVES_MAX; i++) {
         const set_drive_t *s = &g_set.drv[i];
-        if (s->state != DRV_ENABLED || s->type != DRV_TYPE_TNFS || !s->host[0]) continue;
+        if (s->state != DRV_ENABLED) continue;
+        bool sd = s->type == DRV_TYPE_SD;
+        if (sd ? s->sd_path[0] != '/' : s->type != DRV_TYPE_TNFS || !s->host[0]) continue;
         vdrive_t *d = &vd[nvd++];
         memset(d, 0, sizeof *d);
         d->slot = i;
+        d->sd = sd;
         d->letter = s->letter >= 'D' && s->letter <= 'P' ? s->letter : 0;   /* TOS: A: .. P: */
-        snprintf(d->server, sizeof d->server, "%s", s->host);
-        snprintf(d->path, sizeof d->path, "%s", s->mount_path[0] ? s->mount_path : "/");
+        if (sd) {
+            snprintf(d->server, sizeof d->server, "SD card");
+            snprintf(d->path, sizeof d->path, "%s", s->sd_path);
+        } else {
+            snprintf(d->server, sizeof d->server, "%s", s->host);
+            snprintf(d->path, sizeof d->path, "%s", s->mount_path[0] ? s->mount_path : "/");
+        }
         d->port = s->port ? s->port : 16384;
         d->prefer_tcp = s->transport == DRV_TCP;
         d->vf_node = -1;
@@ -549,9 +567,11 @@ uint32_t net_status_text(char *p, uint32_t max)
     ADD("TNFS       : %lu retries, %lu requests without answer since start\r\n",
         (unsigned long)tnfs_retries, (unsigned long)tnfs_lost);
     if (!nvd) ADD("TNFS       : no drive configured\r\n");
-    for (int i = 0; i < nvd; i++)
-        ADD("TNFS %d     : %s:%u %s\r\n  %s\r\n%s", i + 1, vd[i].server, vd[i].port,
-            vd[i].path, vd[i].status, vd[i].dir);
+    for (int i = 0; i < nvd; i++) {
+        if (vd[i].sd) ADD("SD   %d     : %s\r\n  %s\r\n%s", i + 1, vd[i].path, vd[i].status, vd[i].dir);
+        else ADD("TNFS %d     : %s:%u %s\r\n  %s\r\n%s", i + 1, vd[i].server, vd[i].port,
+                 vd[i].path, vd[i].status, vd[i].dir);
+    }
 #undef ADD
     return n;
 }
@@ -1114,6 +1134,81 @@ static bool vscan_dirx(uint16_t d, const char *path)
 
 /* the entries of directory node d become nodes at the end of the drive's
    part of the table (contiguous). false: the server could not open it. */
+/* ---------------- SD card drives (FatFs) ----------------
+ * A folder on the card (the drive's path, e.g. /hd) is the drive's root.
+ * Names, sizes and times come from FatFs as from READDIRX; hidden and system
+ * entries (System Volume Information) are left out like names with a dot.
+ */
+static FATFS sd_fs;
+static int   sd_state;          /* 0 not tried, 1 mounted, -1 no card / not readable */
+
+static bool sd_mount(void)
+{
+    if (!sd_state) sd_state = f_mount(&sd_fs, "", 1) == FR_OK ? 1 : -1;
+    return sd_state > 0;
+}
+
+/* the card's path of rel ("/" or "/a/b") on the current drive */
+static void sd_full(char *out, int max, const char *rel)
+{
+    snprintf(out, (size_t)max, "%s%s", strcmp(cur->path, "/") ? cur->path : "",
+             strcmp(rel, "/") || !strcmp(cur->path, "/") ? rel : "");
+}
+
+/* FAT date and time -> unix time (as dos_time() goes back) */
+static uint32_t fat_unix(uint16_t date, uint16_t time)
+{
+    int32_t y = 1980 + (date >> 9), m = (date >> 5) & 15, d = date & 31;
+    if (m < 1 || m > 12) m = 1;
+    if (d < 1) d = 1;
+    y -= m <= 2;                                    /* days from civil (Howard Hinnant) */
+    int32_t era = y / 400;
+    uint32_t yoe = (uint32_t)(y - era * 400);
+    uint32_t doy = (uint32_t)(153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + (uint32_t)d - 1;
+    uint32_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    int32_t days = era * 146097 + (int32_t)doe - 719468;
+    return (uint32_t)days * 86400u + (time >> 11) * 3600u + ((time >> 5) & 63) * 60u + (time & 31) * 2u;
+}
+
+static bool vscan_sd(uint16_t d, const char *rel)
+{
+    static char full[300];
+    static FILINFO fi;
+    DIR dir;
+    sd_full(full, sizeof full, rel);
+    if (f_opendir(&dir, full) != FR_OK) return false;
+    while (f_readdir(&dir, &fi) == FR_OK && fi.fname[0]) {
+        if (fi.fname[0] == '.' || (fi.fattrib & (AM_HID | AM_SYS))) continue;
+        if (!vscan_room(d, fi.fname)) continue;
+        uint32_t size = fi.fsize > 0xffffffffu ? 0xffffffffu : (uint32_t)fi.fsize;
+        vscan_add(d, fi.fname, (fi.fattrib & AM_DIR) != 0, size, fat_unix(fi.fdate, fi.ftime),
+                  (fi.fattrib & AM_RDO) != 0);
+    }
+    f_closedir(&dir);
+    return true;
+}
+
+static void vfile_close(void);
+
+static bool vfile_read_sd(uint16_t node, uint32_t off, uint8_t *dst, uint32_t len)
+{
+    static char rel[256], full[300];
+    vdrive_t *d = cur;
+    if (d->vf_node != node) {
+        vfile_close();
+        vpath(node, rel, sizeof rel);
+        sd_full(full, sizeof full, rel);
+        if (f_open(&d->vf_fil, full, FA_READ) != FR_OK) return false;
+        d->vf_node = node;
+        d->vf_pos = 0;
+    }
+    if (off != d->vf_pos && f_lseek(&d->vf_fil, off) != FR_OK) { vfile_close(); return false; }
+    UINT got = 0;
+    if (f_read(&d->vf_fil, dst, len, &got) != FR_OK) { vfile_close(); return false; }
+    d->vf_pos = off + got;                          /* past the end: zeros (buf is cleared) */
+    return true;
+}
+
 static bool vscan_dir(uint16_t d)
 {
     static char path[256], child[320];      /* not reentrant: keep off the stack */
@@ -1121,6 +1216,7 @@ static bool vscan_dir(uint16_t d)
     vpath(d, path, sizeof path);
     vn[d].child_start = dr->node_end;
     vn[d].child_count = 0;
+    if (dr->sd) return vscan_sd(d, path);
     if (!dr->no_dirx && vscan_dirx(d, path)) return true;
     int n = tnfs_req(0x10, path, (int)strlen(path) + 1);    /* OPENDIR */
     if (n < 6 || rx[4] != 0) return false;
@@ -1202,8 +1298,8 @@ static bool vdir_load(uint16_t dir)
     if (dir != d->root) {
         static char p[256];
         vpath(dir, p, sizeof p);
-        printf("net: TNFS %d: read %s: %u entries, clusters up to %lu, nodes %u/%u%s\n",
-               (int)(d - vd) + 1, p, vn[dir].child_count, (unsigned long)d->next_cl,
+        printf("net: %s %d: read %s: %u entries, clusters up to %lu, nodes %u/%u%s\n",
+               d->sd ? "SD" : "TNFS", (int)(d - vd) + 1, p, vn[dir].child_count, (unsigned long)d->next_cl,
                d->node_end - d->root, d->node_limit - d->root,
                d->skipped != skipped0 ? " (some skipped)" : "");
     }
@@ -1315,13 +1411,15 @@ static void vdir_entry(uint16_t d, uint32_t k, uint8_t *e)
 static void vfile_close(void)
 {
     vdrive_t *d = cur;
-    if (d->vf_node >= 0 && d->mounted) tnfs_req(0x23, &d->vf_handle, 1);   /* CLOSE */
+    if (d->vf_node >= 0 && d->sd) f_close(&d->vf_fil);
+    else if (d->vf_node >= 0 && d->mounted) tnfs_req(0x23, &d->vf_handle, 1);   /* CLOSE */
     d->vf_node = -1;
 }
 
 static bool vfile_read1(uint16_t node, uint32_t off, uint8_t *dst, uint32_t len)
 {
     vdrive_t *d = cur;
+    if (d->sd) return vfile_read_sd(node, off, dst, len);
     if (d->vf_node != node) {
         vfile_close();
         uint8_t req[300];
@@ -1464,6 +1562,7 @@ static bool vfat_write(uint32_t rel, const uint8_t *buf)
     vdrive_t *d = cur;
     int k = (int)(d - vd);
     if (rel == 0) return true;                              /* boot sector: fixed */
+    if (d->sd) return false;                                /* SD drive: read-only (phase 1) */
     if (!d->ready || !tmp_io(rel, (uint8_t *)buf, true)) return false;
     wbits[k][rel >> 3] |= (uint8_t)(1u << (rel & 7));
     dbits[k][rel >> 3] |= (uint8_t)(1u << (rel & 7));
@@ -1477,7 +1576,16 @@ static bool vfat_write(uint32_t rel, const uint8_t *buf)
 static void vdrive_fail(int i, const char *reason)
 {
     vdrive_t *d = &vd[i];
-    int n = snprintf(d->errtxt, sizeof d->errtxt,
+    int n = d->sd ? snprintf(d->errtxt, sizeof d->errtxt,
+                     "ACSI2TNFS: SD card drive not available\r\n"
+                     "\r\n"
+                     "Reason : %s\r\n"
+                     "Folder : %s\r\n"
+                     "\r\n"
+                     "Use a card formatted FAT32 or exFAT on a PC, with this\r\n"
+                     "folder on it, then press N on the USB console of the\r\n"
+                     "adapter or restart it.\r\n", reason, d->path)
+                  : snprintf(d->errtxt, sizeof d->errtxt,
                      "ACSI2TNFS: network drive not available\r\n"
                      "\r\n"
                      "Reason : %s\r\n"
@@ -1508,7 +1616,8 @@ static bool vfat_sector(uint32_t rel, uint8_t *buf)
                 put16(buf + 4, 0xffff);
             }
         } else if (rel == 1 + 2 * V_SPF) {                  /* first root sector */
-            vdirent(buf, d->failed ? "NET_ERR TXT" : "NET_WAITTXT", 0x01, 0, 2, d->errlen);
+            vdirent(buf, !d->failed ? "NET_WAITTXT" : d->sd ? "SD_ERR  TXT" : "NET_ERR TXT",
+                    0x01, 0, 2, d->errlen);
         } else if (rel == V_DATREC) {                       /* cluster 2 */
             memcpy(buf, d->errtxt, d->errlen);
         }
@@ -1879,6 +1988,38 @@ static void drives_down(void)
     cur = NULL;
 }
 
+/* drive i (cur) can be reached: read its root, show it, tell GEMDOS */
+static void vdrive_up(int i)
+{
+    vdrive_t *d = &vd[i];
+    d->dir[0] = 0;
+    vfat_scan();
+    for (uint16_t k = d->root + 1; k < d->node_end; k++) {
+        char p[256];
+        vpath(k, p, sizeof p);
+        printf("  %.8s.%.3s %s %8lu  cl %5u+%-4u %s\n", vn[k].n83, vn[k].n83 + 8,
+               vn[k].isdir ? "<DIR>" : "     ", (unsigned long)vn[k].size,
+               vn[k].first_cl, vn[k].ncl, p);
+    }
+    int len = 0;
+    for (uint16_t k = 0; k < vn[d->root].child_count && len < (int)sizeof d->dir - 40; k++) {
+        const vnode_t *v = &vn[vn[d->root].child_start + k];
+        len += snprintf(d->dir + len, sizeof d->dir - (size_t)len, "%s%s%s",
+                        len ? ", " : "  ", vpool + v->name_off, v->isdir ? "\\" : "");
+    }
+    if (vn[d->root].child_count && len < (int)sizeof d->dir - 3) strcpy(d->dir + len, "\r\n");
+    if (d->sd)
+        snprintf(d->status, sizeof d->status, "OK! SD card, %s: root %lu files, %lu dirs%s",
+                 sd_fs.fs_type == FS_EXFAT ? "exFAT" : sd_fs.fs_type == FS_FAT32 ? "FAT32" : "FAT",
+                 (unsigned long)d->files, (unsigned long)d->dirs, d->skipped ? " (some skipped)" : "");
+    else
+        snprintf(d->status, sizeof d->status, "OK! %s, TNFS %u.%u: root %lu files, %lu dirs%s",
+                 d->use_tcp ? "TCP" : "UDP", d->vmaj, d->vmin,
+                 (unsigned long)d->files, (unsigned long)d->dirs, d->skipped ? " (some skipped)" : "");
+    printf("net: %s %d %s\n", d->sd ? "SD" : "TNFS", i + 1, d->status);
+    disk_changed(1 + i);                    /* new tree: GEMDOS must re-read */
+}
+
 /* connect, mount and scan every drive: at start-up and by console N */
 static void tnfs_connect_and_scan(void)
 {
@@ -1896,11 +2037,28 @@ static void tnfs_connect_and_scan(void)
         d->failed = false;
         vdrive_wait(d);
     }
-    if (!wifi_connect()) {
+    /* SD drives first: they need no Wi-Fi */
+    int ntnfs = 0;
+    sd_state = 0;                           /* (re)mount: the card may have changed */
+    for (int i = 0; i < nvd; i++) {
+        if (!vd[i].sd) { ntnfs++; continue; }
+        vreq_service();
+        vdrive_t *d = cur = &vd[i];
+        FILINFO fi;
+        printf("net: SD %d: %s\n", i + 1, d->path);
+        if (!sd_mount()) vdrive_fail(i, "no SD card, or not FAT32/exFAT");
+        else if (strcmp(d->path, "/") && (f_stat(d->path, &fi) != FR_OK || !(fi.fattrib & AM_DIR)))
+            vdrive_fail(i, "folder not found on the SD card");
+        else vdrive_up(i);
+        if (d->failed) printf("net: SD %d not available\n", i + 1);
+    }
+    cur = NULL;
+
+    if (!g_net.ssid[0] || !wifi_connect()) {
         if (g_set.rtc_enabled && clk_state != CLK_VALID) clk_state = CLK_NONE;
         char why[120];
-        snprintf(why, sizeof why, "no Wi-Fi (%s)", wifi_status);
-        for (int i = 0; i < nvd; i++) vdrive_fail(i, why);
+        snprintf(why, sizeof why, "no Wi-Fi (%s)", g_net.ssid[0] ? wifi_status : "not set up");
+        for (int i = 0; i < nvd; i++) if (!vd[i].sd) vdrive_fail(i, why);
         return;
     }
     /* the time first: the driver may be waiting for it at boot */
@@ -1911,38 +2069,18 @@ static void tnfs_connect_and_scan(void)
         if (!ok) ntp_fails = 1;     /* CLK_NTP stays: quick retries from net_poll */
         ntp_next = make_timeout_time_ms(ok ? NTP_RESYNC_MS : NTP_FAST_MS);
     }
-    if (!nvd) { printf("net: no TNFS drive configured\n"); return; }
+    if (!ntnfs) { printf("net: no TNFS drive configured\n"); return; }
     for (int i = 0; i < nvd; i++) {
+        if (vd[i].sd) continue;
         vreq_service();
         vdrive_t *d = cur = &vd[i];
-        d->dir[0] = 0;
         printf("net: TNFS %d: %s:%u %s\n", i + 1, d->server, d->port, d->path);
         if (!tnfs_mount()) {
             printf("net: TNFS %d %s\n", i + 1, d->status);
             vdrive_fail(i, d->status);
             continue;
         }
-        vfat_scan();
-        for (uint16_t k = d->root + 1; k < d->node_end; k++) {
-            char p[256];
-            vpath(k, p, sizeof p);
-            printf("  %.8s.%.3s %s %8lu  cl %5u+%-4u %s\n", vn[k].n83, vn[k].n83 + 8,
-                   vn[k].isdir ? "<DIR>" : "     ", (unsigned long)vn[k].size,
-                   vn[k].first_cl, vn[k].ncl, p);
-        }
-        int len = 0;
-        for (uint16_t k = 0; k < vn[d->root].child_count && len < (int)sizeof d->dir - 40; k++) {
-            const vnode_t *v = &vn[vn[d->root].child_start + k];
-            len += snprintf(d->dir + len, sizeof d->dir - (size_t)len, "%s%s%s",
-                            len ? ", " : "  ", vpool + v->name_off, v->isdir ? "\\" : "");
-        }
-        if (vn[d->root].child_count && len < (int)sizeof d->dir - 3) strcpy(d->dir + len, "\r\n");
-        snprintf(d->status, sizeof d->status,
-                 "OK! %s, TNFS %u.%u: root %lu files, %lu dirs%s",
-                 d->use_tcp ? "TCP" : "UDP", d->vmaj, d->vmin,
-                 (unsigned long)d->files, (unsigned long)d->dirs, d->skipped ? " (some skipped)" : "");
-        printf("net: TNFS %d %s\n", i + 1, d->status);
-        disk_changed(1 + i);                /* new tree: GEMDOS must re-read */
+        vdrive_up(i);
     }
     cur = NULL;
 }
@@ -1955,6 +2093,7 @@ void net_init(void)
         snprintf(wifi_status, sizeof wifi_status, "idle (not connected yet)");
         test_req = true;                            /* auto-connect at start-up */
     }
+    for (int i = 0; i < nvd; i++) if (vd[i].sd) test_req = true;   /* SD drives: also without Wi-Fi */
 }
 
 void net_poll(void)

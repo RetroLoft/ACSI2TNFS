@@ -178,3 +178,41 @@ void sd_console_test(void)
         }
     }
 }
+
+/* ---------------- FatFs disk I/O (one drive: the card) ---------------- */
+
+#include "third_party/fatfs/ff.h"
+#include "third_party/fatfs/diskio.h"
+
+static DSTATUS sd_stat = STA_NOINIT;
+
+DSTATUS disk_initialize(BYTE pdrv)
+{
+    const char *why;
+    if (pdrv) return STA_NOINIT;
+    sd_stat = sd_init(&why) ? 0 : STA_NOINIT | STA_NODISK;
+    return sd_stat;
+}
+
+DSTATUS disk_status(BYTE pdrv) { return pdrv ? STA_NOINIT : sd_stat; }
+
+DRESULT disk_read(BYTE pdrv, BYTE *buff, LBA_t sector, UINT count)
+{
+    if (pdrv || (sd_stat & STA_NOINIT)) return RES_NOTRDY;
+    for (UINT i = 0; i < count; i++)
+        if (!sd_read((uint32_t)sector + i, buff + i * 512u)) return RES_ERROR;
+    return RES_OK;
+}
+
+DRESULT disk_write(BYTE pdrv, const BYTE *buff, LBA_t sector, UINT count)
+{
+    (void)pdrv; (void)buff; (void)sector; (void)count;
+    return RES_WRPRT;                           /* phase 1: the SD drive is read-only */
+}
+
+DRESULT disk_ioctl(BYTE pdrv, BYTE cmd, void *buff)
+{
+    (void)buff;
+    if (pdrv) return RES_PARERR;
+    return cmd == CTRL_SYNC ? RES_OK : RES_PARERR;
+}

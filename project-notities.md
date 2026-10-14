@@ -313,4 +313,5 @@ Twee functies, allebei met de kaart als **optie**: zonder kaart werkt alles zoal
 
 - Schrijven naar de SD-drive (E:, `/hd`): bestand naar de root en naar een submap, nieuwe map, bestand daarin, hernoemen, wissen. `vsync` zet het binnen 12-78 ms op de kaart (`write /TEST2/RUNME.TOS, 5090 bytes ok`, `mkdir`, `rename`, `delete`); 4 resets daarna, alles bleef staan. "Perfect en snel" (Frank).
 - Hoe: een laag `fs_*` (open, seek, read, write, close, mkdir/unlink/rmdir, rename) onder het tijdelijke sectorbestand, `vbuild` en `vsync`, per drive naar TNFS of FatFs. Het tijdelijke bestand van een SD-drive is `.A2T.TMP` in de map van de drive. Bestanden krijgen de netwerktijd (`get_fattime`).
-- Nog te doen: de kaart op de pc controleren; TNFS-schrijven opnieuw testen (de enige schrijfbare TNFS-drive, de LAN-drive, is nu de SD-drive geworden).
+- TNFS-schrijven via dezelfde laag opnieuw getest (LAN-drive `192.168.178.10 /Atari.ST`, map `TNFSTEST`): mkdir, write (125 KB en 16 KB), rename, delete, en een bestand van de SD-drive naar de LAN-drive; 7 resets. Op de server byte voor byte gelijk aan de originelen. Een `vsync` van 125 KB naar de server kost 2,9-4,2 s (een TNFS-WRITE per 512 bytes), naar de kaart tientallen ms.
+- Nog te doen: de kaart op de pc controleren.

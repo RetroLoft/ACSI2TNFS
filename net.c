@@ -491,6 +491,7 @@ typedef struct {
     uint32_t vf_pos;
     /* writes: every written sector lives in a hidden file on the server */
     bool     tmp_open, tmp_used, wr_pending;
+    bool     tmp_sd;                /* the hidden file is on the SD card     */
     uint8_t  tmp_handle;
     uint32_t last_wr_ms;
     char     status[96];
@@ -563,6 +564,8 @@ static uint32_t tnfs_retries, tnfs_lost;    /* console n: how the network does *
 uint32_t net_vdrives(void) { return (uint32_t)nvd; }
 uint8_t net_vdrive_letter(uint32_t k) { return k < (uint32_t)nvd ? vd[k].letter : 0; }
 
+static int sd_state;                /* the SD card: see sd_mount() */
+
 uint32_t net_status_text(char *p, uint32_t max)
 {
     uint32_t n = 0;
@@ -579,6 +582,7 @@ uint32_t net_status_text(char *p, uint32_t max)
     }
     ADD("TNFS       : %lu retries, %lu requests without answer since start\r\n",
         (unsigned long)tnfs_retries, (unsigned long)tnfs_lost);
+    ADD("TNFS writes: %s\r\n", sd_state > 0 ? "cached on the SD card (/.A2TCACHE)" : "via the server (no SD card)");
     if (!nvd) ADD("TNFS       : no drive configured\r\n");
     for (int i = 0; i < nvd; i++) {
         if (vd[i].sd) ADD("SD   %d     : %s\r\n  %s\r\n%s", i + 1, vd[i].path, vd[i].status, vd[i].dir);
@@ -763,7 +767,7 @@ static int tnfs_req(uint8_t cmd, const void *data, int dlen)
     if (!ok) { printf("net: TNFS %s: %s\n", d->server, d->status); return -1; }
     d->gen++;
     d->vf_node = -1;                        /* handles of the old session */
-    d->tmp_open = false;
+    if (!d->tmp_sd) d->tmp_open = false;    /* the one on the SD card stays valid */
     switch (cmd) {
     case 0x10: case 0x13: case 0x14: case 0x17: case 0x24: case 0x26: case 0x28: case 0x29:
         return tnfs_req1(cmd, data, dlen);  /* OPENDIR MKDIR RMDIR OPENDIRX STAT UNLINK RENAME OPEN */
@@ -1322,6 +1326,7 @@ static bool vdir_load(uint16_t dir)
 static void vfile_close(void);
 static void tnfs_close(uint8_t h);
 static void fs_close(uint8_t h);
+static void tmp_close(vdrive_t *d);
 
 /* the current drive's tree from scratch: only the root (after mounting and
    at every Atari reset); folders follow when the Atari reads them */
@@ -1330,8 +1335,8 @@ static void vfat_scan(void)
     vdrive_t *d = cur;
     d->ready = false;
     vfile_close();
-    if (d->tmp_open && (d->sd || d->mounted)) fs_close(d->tmp_handle);
-    d->tmp_open = d->tmp_used = d->wr_pending = false;
+    tmp_close(d);
+    d->tmp_used = d->wr_pending = false;
     d->files = d->dirs = d->skipped = 0;
     uint16_t r = d->root;
     d->node_end = r + 1;
@@ -1562,50 +1567,33 @@ static const char *fs_err(void)
 
 static FIL *sd_h(uint8_t h) { return h >= 1 && h <= SD_FILES ? &sd_fil[h - 1] : NULL; }
 
-static bool fs_open(const char *path, uint16_t flags, uint8_t *h)
+/* files on the card by their full path, handles 1..SD_FILES */
+static bool sdf_open(const char *full, BYTE mode, uint8_t *h)
 {
-    static char full[300];
-    if (!cur->sd) return tnfs_open(path, flags, h);
     int k = 0;
     while (k < SD_FILES && sd_fil_used[k]) k++;
     if (k == SD_FILES) { sd_err = FR_TOO_MANY_OPEN_FILES; return false; }
-    sd_full(full, sizeof full, path);
-    BYTE mode = (flags & TO_RDWR) == TO_RDWR ? FA_READ | FA_WRITE : FA_WRITE;
-    mode |= (flags & TO_TRUNC) ? FA_CREATE_ALWAYS : (flags & TO_CREAT) ? FA_OPEN_ALWAYS : FA_OPEN_EXISTING;
     if ((sd_err = f_open(&sd_fil[k], full, mode)) != FR_OK) return false;
     sd_fil_used[k] = true;
     *h = (uint8_t)(k + 1);
     return true;
 }
 
-static bool fs_seek(uint8_t h, uint32_t off)
+static bool sdf_seek(uint8_t h, uint32_t off)
 {
-    if (!cur->sd) return tnfs_seek(h, off);
     FIL *f = sd_h(h);
     return f && (sd_err = f_lseek(f, off)) == FR_OK;
 }
 
-static bool fs_write(uint8_t h, const uint8_t *buf, uint16_t len)
+static bool sdf_write(uint8_t h, const uint8_t *buf, uint16_t len)
 {
-    if (!cur->sd) return tnfs_write(h, buf, len);
     FIL *f = sd_h(h);
     UINT n = 0;
     return f && (sd_err = f_write(f, buf, len, &n)) == FR_OK && n == len;
 }
 
-/* up to 512 bytes; *got = bytes read (0 at the end) */
-static bool fs_read(uint8_t h, uint8_t *buf, uint16_t len, uint16_t *got)
+static bool sdf_read(uint8_t h, uint8_t *buf, uint16_t len, uint16_t *got)
 {
-    if (!cur->sd) {
-        uint8_t req[3] = { h, (uint8_t)(len & 0xff), (uint8_t)(len >> 8) };
-        int n = tnfs_req(0x21, req, 3);                     /* READ */
-        if (n < 7 || rx[4] != 0) return false;
-        uint16_t g = le16(rx + 5);
-        if (g > len || g > n - 7) return false;
-        memcpy(buf, rx + 7, g);
-        *got = g;
-        return true;
-    }
     FIL *f = sd_h(h);
     UINT n = 0;
     if (!f || (sd_err = f_read(f, buf, len, &n)) != FR_OK) return false;
@@ -1613,13 +1601,52 @@ static bool fs_read(uint8_t h, uint8_t *buf, uint16_t len, uint16_t *got)
     return true;
 }
 
-static void fs_close(uint8_t h)
+static void sdf_close(uint8_t h)
 {
-    if (!cur->sd) { tnfs_close(h); return; }
     FIL *f = sd_h(h);
-    if (!f) return;
+    if (!f || !sd_fil_used[h - 1]) return;
     f_close(f);
     sd_fil_used[h - 1] = false;
+}
+
+static bool fs_open(const char *path, uint16_t flags, uint8_t *h)
+{
+    static char full[300];
+    if (!cur->sd) return tnfs_open(path, flags, h);
+    sd_full(full, sizeof full, path);
+    BYTE mode = (flags & TO_RDWR) == TO_RDWR ? FA_READ | FA_WRITE : FA_WRITE;
+    mode |= (flags & TO_TRUNC) ? FA_CREATE_ALWAYS : (flags & TO_CREAT) ? FA_OPEN_ALWAYS : FA_OPEN_EXISTING;
+    return sdf_open(full, mode, h);
+}
+
+static bool fs_seek(uint8_t h, uint32_t off)
+{
+    return cur->sd ? sdf_seek(h, off) : tnfs_seek(h, off);
+}
+
+static bool fs_write(uint8_t h, const uint8_t *buf, uint16_t len)
+{
+    return cur->sd ? sdf_write(h, buf, len) : tnfs_write(h, buf, len);
+}
+
+/* up to 512 bytes; *got = bytes read (0 at the end) */
+static bool fs_read(uint8_t h, uint8_t *buf, uint16_t len, uint16_t *got)
+{
+    if (cur->sd) return sdf_read(h, buf, len, got);
+    uint8_t req[3] = { h, (uint8_t)(len & 0xff), (uint8_t)(len >> 8) };
+    int n = tnfs_req(0x21, req, 3);                         /* READ */
+    if (n < 7 || rx[4] != 0) return false;
+    uint16_t g = le16(rx + 5);
+    if (g > len || g > n - 7) return false;
+    memcpy(buf, rx + 7, g);
+    *got = g;
+    return true;
+}
+
+static void fs_close(uint8_t h)
+{
+    if (cur->sd) sdf_close(h);
+    else tnfs_close(h);
 }
 
 /* 0x26 UNLINK, 0x13 MKDIR, 0x14 RMDIR */
@@ -1641,21 +1668,58 @@ static bool fs_rename(const char *from, const char *to)
     return (sd_err = f_rename(a, b)) == FR_OK;
 }
 
-/* one sector of TMP_NAME */
+/* ---------------- the hidden sector file of a drive ----------------
+ * Every sector the Atari writes lives here until vsync has put it into the
+ * files. An SD drive keeps it in its own folder (TMP_NAME). A TNFS drive
+ * keeps it on the SD card when there is one (/.A2TCACHE/T<n>.TMP: the Atari
+ * then waits for the card, not for a TNFS WRITE per sector), else on the
+ * server (TMP_NAME).
+ */
+#define SD_CACHE_DIR "/.A2TCACHE"
+
+static bool tmp_open1(vdrive_t *d)
+{
+    uint16_t fl = TO_RDWR | TO_CREAT | (d->tmp_used ? 0 : TO_TRUNC);
+    d->tmp_sd = false;
+    if (!d->sd && sd_state > 0) {
+        static char full[40];
+        FRESULT r = f_mkdir(SD_CACHE_DIR);
+        if (r == FR_OK || r == FR_EXIST) {
+            snprintf(full, sizeof full, SD_CACHE_DIR "/T%d.TMP", (int)(d - vd) + 1);
+            d->tmp_sd = sdf_open(full, FA_READ | FA_WRITE | (d->tmp_used ? FA_OPEN_ALWAYS : FA_CREATE_ALWAYS),
+                                 &d->tmp_handle);
+        }
+        if (!d->tmp_sd) printf("net: TNFS %d: write cache on the SD card failed (FatFs %d), using the server\n",
+                               (int)(d - vd) + 1, (int)(d->tmp_sd ? 0 : sd_err));
+    }
+    if (!d->tmp_sd && !fs_open(TMP_NAME, fl, &d->tmp_handle)) {
+        printf("net: cannot create %s: %s\n", TMP_NAME, fs_err());
+        return false;
+    }
+    d->tmp_open = d->tmp_used = true;
+    return true;
+}
+
+static void tmp_close(vdrive_t *d)
+{
+    if (d->tmp_open) {
+        if (d->tmp_sd) sdf_close(d->tmp_handle);
+        else if (d->sd || d->mounted) fs_close(d->tmp_handle);
+    }
+    d->tmp_open = false;
+}
+
+/* one sector of the hidden file */
 static bool tmp_io1(uint32_t rel, uint8_t *buf, bool write)
 {
     vdrive_t *d = cur;
-    if (!d->tmp_open) {
-        uint16_t fl = TO_RDWR | TO_CREAT | (d->tmp_used ? 0 : TO_TRUNC);
-        if (!fs_open(TMP_NAME, fl, &d->tmp_handle)) {
-            printf("net: cannot create %s: %s\n", TMP_NAME, fs_err());
-            return false;
-        }
-        d->tmp_open = d->tmp_used = true;
-    }
+    uint16_t got;
+    if (!d->tmp_open && !tmp_open1(d)) return false;
+    if (d->tmp_sd)
+        return sdf_seek(d->tmp_handle, rel * 512u) &&
+               (write ? sdf_write(d->tmp_handle, buf, 512) : sdf_read(d->tmp_handle, buf, 512, &got));
     if (!fs_seek(d->tmp_handle, rel * 512u)) return false;
     if (write) return fs_write(d->tmp_handle, buf, 512);
-    uint16_t got;
     return fs_read(d->tmp_handle, buf, 512, &got);
 }
 
@@ -1663,7 +1727,7 @@ static bool tmp_io(uint32_t rel, uint8_t *buf, bool write)
 {
     uint8_t gen = cur->gen;
     if (tmp_io1(rel, buf, write)) return true;
-    return cur->gen != gen && tmp_io1(rel, buf, write);         /* new session */
+    return cur->gen != gen && !cur->tmp_sd && tmp_io1(rel, buf, write);   /* new session */
 }
 
 static bool vfat_write(uint32_t rel, const uint8_t *buf)
@@ -2090,8 +2154,7 @@ static void drives_down(void)
         cur = &vd[i];
         cur->ready = false;
         vfile_close();
-        if (cur->tmp_open && (cur->sd || cur->mounted)) fs_close(cur->tmp_handle);
-        cur->tmp_open = false;
+        tmp_close(cur);
         tnfs_unmount();
     }
     cur = NULL;
@@ -2149,6 +2212,7 @@ static void tnfs_connect_and_scan(void)
     /* SD drives first: they need no Wi-Fi */
     int ntnfs = 0;
     sd_state = 0;                           /* (re)mount: the card may have changed */
+    sd_mount();                             /* also without SD drives: the write cache */
     for (int i = 0; i < nvd; i++) {
         if (!vd[i].sd) { ntnfs++; continue; }
         vreq_service();

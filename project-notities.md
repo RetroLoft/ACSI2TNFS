@@ -315,3 +315,9 @@ Twee functies, allebei met de kaart als **optie**: zonder kaart werkt alles zoal
 - Hoe: een laag `fs_*` (open, seek, read, write, close, mkdir/unlink/rmdir, rename) onder het tijdelijke sectorbestand, `vbuild` en `vsync`, per drive naar TNFS of FatFs. Het tijdelijke bestand van een SD-drive is `.A2T.TMP` in de map van de drive. Bestanden krijgen de netwerktijd (`get_fattime`).
 - TNFS-schrijven via dezelfde laag opnieuw getest (LAN-drive `192.168.178.10 /Atari.ST`, map `TNFSTEST`): mkdir, write (125 KB en 16 KB), rename, delete, en een bestand van de SD-drive naar de LAN-drive; 7 resets. Op de server byte voor byte gelijk aan de originelen. Een `vsync` van 125 KB naar de server kost 2,9-4,2 s (een TNFS-WRITE per 512 bytes), naar de kaart tientallen ms.
 - Nog te doen: de kaart op de pc controleren.
+
+**Fase 3: testverslag (14 oktober 2026, ST met onze driver)**
+
+- Met kaart: het tijdelijke sectorbestand van een TNFS-drive staat op de kaart (`/.A2TCACHE/T<n>.TMP`); console `n`: "TNFS writes: cached on the SD card". Map `TEST4` en drie bestanden (125 KB, 16 KB, 2 KB, een van de SD-drive) naar de LAN-drive: op de server byte voor byte gelijk. De Atari schrijft ~280 KB/s, eerst ~45 KB/s (een TNFS-WRITE per sector naar `/.A2T.TMP`). `vsync` van 125 KB: 1,4 s in plaats van 2,9-4,2 s, omdat de sectoren van de kaart worden teruggelezen.
+- Zonder kaart (eruit, `N`): "via the server (no SD card)"; schrijven gaat via `/.A2T.TMP` op de server, het bestand kwam goed aan. Kaart terug en `N`: weer de cache op de kaart.
+- Na een nieuwe TNFS-sessie (status 0xFF) blijft het tijdelijke bestand op de kaart open; alleen dat op de server moet opnieuw.

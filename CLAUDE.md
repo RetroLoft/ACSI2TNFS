@@ -1,7 +1,8 @@
 # ACSI2TNFS - notes for Claude Code
 
 A Raspberry Pi Pico 2 W that acts as an ACSI device for the Atari ST: a flash disk C:,
-up to 3 TNFS network drives (D:-P:), a network clock (NTP) and a network function for
+up to 3 virtual drives (D:-P:: TNFS network drives and folders on a micro SD card, which
+also caches TNFS writes), a network clock (NTP, NETCLOCK.PRG) and a network function for
 STinG (ACSI_NET.STX, installed with STINGINS.TOS). Configured from the Atari with
 ACSITNFS.PRG. Firmware 0.4.0 (`version.txt`). User docs: `README.md`, `docs/*.md`;
 developer docs: `docs/DEVELOPMENT.md`; hardware: `hardware/README.md` (branch `v2`);
@@ -46,7 +47,8 @@ first. The old `build/` folder (if present) is an RP2040 build: don't use it.
 - The console runs at any baud rate (USB). Useful keys: `h` help, `i` info, `v` verbose
   command log, `w` network bridge stats, `W` frame timeline, `n` network status (with
   RSSI and TNFS retries), `N` rescan TNFS drives, `R` restore system files on C:, `F`
-  rewrite C:, `H` hidden, `s`/`t` sniffer/target mode, `0`-`7` ACSI id. A short press on
+  rewrite C:, `H` hidden, `s`/`t` sniffer/target mode, `0`-`7` ACSI id, `c` SD card test
+  (type, size, partitions), `o` /OE pull-up test (U1 as after a reset). A short press on
   the BOOTSEL button also toggles hidden mode (until a board with its own button).
 
 ## Things that cost a lot of time (don't repeat)
@@ -76,6 +78,13 @@ first. The old `build/` folder (if present) is an RP2040 build: don't use it.
   go into FAT sectors the Atari has not read since its reset; an Atari reset starts again
   from the root. tnfsd drops idle sessions after 600 s; the firmware mounts again on
   status 0xFF. A drive that fails shows NET_ERR.TXT until console `N`.
+- **SD card** (SPI0: GP2 CLK, GP3 MOSI, GP4 MISO, GP5 CS; FatFs in `third_party/fatfs`,
+  FAT32/exFAT, long names as 8.3): an SD drive is a folder of the card through the same
+  virtual FAT as TNFS; it comes up before Wi-Fi and also without it; no card or folder:
+  SD_ERR.TXT. The write side goes through `fs_*` (TNFS or FatFs per drive). The hidden
+  sector file of a TNFS drive is `/.A2TCACHE/T<n>.TMP` on the card when there is one
+  (writes ~280 KB/s instead of ~45 KB/s), else `/.A2T.TMP` on the server. Console `N`
+  mounts the card again.
 - **Frank's tnfsd (retroloft) leaks directory handles:** OPENDIR then answers 0x10
   (EMFILE) and drives look empty. Test OPENDIR from the PC; `sudo systemctl restart
   tnfsd` (or `tnfsd-public`) fixes it (Frank's sudo password needed).
@@ -93,9 +102,10 @@ first. The old `build/` folder (if present) is an RP2040 build: don't use it.
 - KiCad schematic files are CRLF; scripts that edit them must keep that.
 - Shell heredocs mangle backslashes on this setup: write scripts with the Write tool.
 
-## State (2026-10-12)
+## State (2026-10-14)
 
-- `main` (not pushed since 2026-10-11): C: as FAT16; TNFS lazy loading with READDIRX,
+- `main`: SD card drives (read and write) and the SD write cache for TNFS; NETCLOCK.PRG.
+  C: as FAT16; TNFS lazy loading with READDIRX,
   NET_WAIT.TXT while connecting; Wi-Fi power saving off; ACSI_NET.STX 00.08 and
   STINGINS.TOS (STinG without XControl); ST-RAM builds for the TT. Tested on the Mega STE
   (TOS 2.06, HDDRIVER, adapter on ACSI id 1) and the TT (TOS 3.06, AHDI, ACSI id 0), and with
@@ -109,6 +119,8 @@ first. The old `build/` folder (if present) is an RP2040 build: don't use it.
 - `acsi-net`: merged into main, kept for history.
 - The time zone is a fixed UTC offset (ACSITNFS.PRG), no automatic summer time: Frank's
   choice.
+- The dev board has R8 on /OE as a pull-down (`o` shows it): U1 is on while the Pico is
+  in reset or BOOTSEL. v2 has the pull-up.
 - Sibling repos (same parent folder): `atari-net-tools` (URLVIEW.TTP: view, `-n` speed
   test, `-o` save to file) and `SideTNFS-Config` (ACSITNFS.PRG, branch `acsi-transport`,
   not merged; its build still has TT-RAM program flags: patched on C: only).
@@ -121,10 +133,11 @@ first. The old `build/` folder (if present) is an RP2040 build: don't use it.
 2. TNFS lazy loading phase 2: at the ceiling (16 MB full or all FAT sectors read) a
    media change; for HDDRIVER through UNIT ATTENTION on TEST UNIT READY (tried once).
 3. New system files on C: without `R` (sysfiles cannot tell new from deleted on purpose).
-4. SD card (SPI0 on GP2-GP5): a PC-formatted card through the same virtual FAT (FatFs).
+4. SD card: still to test on a PC, with exFAT, without Wi-Fi and under HDDRIVER; card
+   swap while the Atari runs (now: `N` and a reset).
 5. C: robustness: a CHKDSK-like console command.
 6. TNFS read cache; `pun_ptr` check next to AHDI/HDDRIVER; drop debug buffers (~100 KB).
-7. First release after the tests, the SD card and the hardware.
+7. First release after the tests and the hardware.
 
 ## Test setup
 

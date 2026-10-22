@@ -217,6 +217,19 @@ void net_clock(uint8_t *out)
     out[10] = (uint8_t)(sec % 60);
 }
 
+/* FatFs: time stamps of what is written to the SD card: the network time
+   (local), or 1 January 2026 while there is none */
+#include "third_party/fatfs/ff.h"
+DWORD get_fattime(void)
+{
+    uint8_t c[16];
+    net_clock(c);
+    if (c[3] != CLK_VALID) return (DWORD)(2026 - 1980) << 25 | 1u << 21 | 1u << 16;
+    uint32_t y = (uint32_t)c[4] << 8 | c[5];
+    return (DWORD)(y - 1980) << 25 | (DWORD)c[6] << 21 | (DWORD)c[7] << 16 |
+           (DWORD)c[8] << 11 | (DWORD)c[9] << 5 | (DWORD)(c[10] / 2);
+}
+
 /* console K: network clock on/off (stored; active from the next Pico start) */
 void net_clock_toggle(void)
 {
@@ -240,6 +253,11 @@ uint32_t net_clock_sync_state(void)
 /* ---------------- virtual partition: core1 <-> core0 hand-over ---------------- */
 
 /* core1 posts a sector request, core0 (network) fills or stores the buffer */
+/* core1: the Atari was reset. core0 syncs what it wrote and reads every TNFS
+   tree again from the root; until then its requests see "not ready". */
+static volatile bool atari_reset;
+void net_atari_reset(void) { atari_reset = true; }
+
 static volatile int      vreq_state;         /* 0 idle, 1 pending, 2 done, 3 failed */
 static volatile uint32_t vreq_drive, vreq_rel, vreq_n;
 static volatile bool     vreq_write;
@@ -327,8 +345,11 @@ uint32_t net_status_text(char *p, uint32_t max)
 #include "lwip/dhcp.h"
 #include "lwip/ip_addr.h"
 #include "lwip/netif.h"
+#include "third_party/fatfs/ff.h"
 
 static bool wifi_inited;
+static void net_sleep_ms(uint32_t ms);
+static void vreq_service(void);
 
 bool net_link_up(void)
 {
@@ -404,7 +425,7 @@ static bool wifi_connect(void)
             else if (st == CYW43_LINK_FAIL) err = "connection failed";
             else if (time_reached(until)) err = "timeout";
             if (err) break;
-            sleep_ms(50);
+            net_sleep_ms(50);
         }
         if (!err) break;
         printf("net: [%lu ms] Wi-Fi try %d: %s\n", (unsigned long)(time_us_64() / 1000), attempt, err);
@@ -414,8 +435,15 @@ static bool wifi_connect(void)
             return false;
         }
         cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);
-        sleep_ms(250);                  /* the first join after power-up often fails */
+        net_sleep_ms(250);              /* the first join after power-up often fails */
     }
+    /* no power saving: in PM2 the radio sleeps after 200 ms without traffic
+       and a reply then waits for a beacon (measured: 60 ms average, peaks
+       over 100 ms). Every Atari read of a TNFS file is a run of 512-byte
+       READs, so that made reads slow enough for HDDRIVER to time out. */
+    cyw43_arch_lwip_begin();
+    cyw43_wifi_pm(&cyw43_state, CYW43_NONE_PM);
+    cyw43_arch_lwip_end();
     const ip4_addr_t *ip = netif_ip4_addr(netif_default);
     snprintf(wifi_status, sizeof wifi_status, "connected, IP %s", ip4addr_ntoa(ip));
     printf("net: [%lu ms] Wi-Fi %s\n", (unsigned long)(time_us_64() / 1000), wifi_status);
@@ -435,6 +463,9 @@ typedef struct {
     char     path[33];
     uint16_t port;
     bool     prefer_tcp;
+    bool     no_dirx;               /* server has no OPENDIRX/READDIRX       */
+    bool     sd;                    /* a folder on the SD card (path), not TNFS */
+    FIL      vf_fil;                /* SD: the open file of the file cache   */
     /* connection */
     ip_addr_t ip;
     bool     use_tcp, mounted;
@@ -445,10 +476,13 @@ typedef struct {
     uint8_t  seq;
     uint8_t  gen;                   /* +1 at every new session (old handles dead) */
     unsigned vmaj, vmin;
-    /* tree: nodes root .. node_end-1 of vn[], cluster owners valloc[va0 .. va0+van-1] */
+    /* tree: nodes root .. node_end-1 of vn[] (room up to node_limit), names
+       pool_start .. pool_end-1 of vpool[], cluster owners valloc[va0 .. va0+van-1] */
     uint16_t root, node_end, node_limit;
-    uint32_t pool_end, pool_limit;
+    uint32_t pool_start, pool_end, pool_limit;
     uint16_t va0, van;
+    uint32_t next_cl;               /* clusters below are handed out         */
+    uint64_t fseen;                 /* FAT sectors the Atari read since its reset */
     uint32_t files, dirs, skipped;
     volatile bool ready;
     /* open file cache */
@@ -457,11 +491,13 @@ typedef struct {
     uint32_t vf_pos;
     /* writes: every written sector lives in a hidden file on the server */
     bool     tmp_open, tmp_used, wr_pending;
+    bool     tmp_sd;                /* the hidden file is on the SD card     */
     uint8_t  tmp_handle;
     uint32_t last_wr_ms;
     char     status[96];
     /* not available (no Wi-Fi, no server, mount refused): the drive shows
-       one read-only file NET_ERR.TXT with this text, as SideTNFS does */
+       one read-only file NET_ERR.TXT with this text, as SideTNFS does;
+       not ready yet (still connecting): NET_WAIT.TXT */
     bool     failed;
     uint16_t errlen;
     char     errtxt[400];
@@ -472,27 +508,63 @@ static vdrive_t vd[VDRIVES_MAX];
 static int      nvd;
 static vdrive_t *cur;
 
+/* drive d is not ready yet: NET_WAIT.TXT tells why it is empty */
+static void vdrive_wait(vdrive_t *d)
+{
+    int n = d->sd ? snprintf(d->errtxt, sizeof d->errtxt,
+                     "ACSI2TNFS: SD card drive not ready yet\r\n"
+                     "\r\n"
+                     "Folder : %s\r\n"
+                     "\r\n"
+                     "The adapter is still reading the SD card. Close this\r\n"
+                     "window and open the drive again in a moment.\r\n", d->path)
+                  : snprintf(d->errtxt, sizeof d->errtxt,
+                     "ACSI2TNFS: network drive not ready yet\r\n"
+                     "\r\n"
+                     "Server : %s:%u\r\n"
+                     "Folder : %s\r\n"
+                     "\r\n"
+                     "The adapter is still connecting to Wi-Fi and the\r\n"
+                     "TNFS server. Close this window and open the drive\r\n"
+                     "again in a moment.\r\n",
+                     d->server, d->port, d->path);
+    d->errlen = (uint16_t)(n < 0 ? 0 : n < (int)sizeof d->errtxt ? n : (int)sizeof d->errtxt - 1);
+}
+
 static void drives_from_settings(void)
 {
     nvd = 0;
     for (int i = 0; i < SET_MAX_DRIVES && nvd < VDRIVES_MAX; i++) {
         const set_drive_t *s = &g_set.drv[i];
-        if (s->state != DRV_ENABLED || s->type != DRV_TYPE_TNFS || !s->host[0]) continue;
+        if (s->state != DRV_ENABLED) continue;
+        bool sd = s->type == DRV_TYPE_SD;
+        if (sd ? s->sd_path[0] != '/' : s->type != DRV_TYPE_TNFS || !s->host[0]) continue;
         vdrive_t *d = &vd[nvd++];
         memset(d, 0, sizeof *d);
         d->slot = i;
+        d->sd = sd;
         d->letter = s->letter >= 'D' && s->letter <= 'P' ? s->letter : 0;   /* TOS: A: .. P: */
-        snprintf(d->server, sizeof d->server, "%s", s->host);
-        snprintf(d->path, sizeof d->path, "%s", s->mount_path[0] ? s->mount_path : "/");
+        if (sd) {
+            snprintf(d->server, sizeof d->server, "SD card");
+            snprintf(d->path, sizeof d->path, "%s", s->sd_path);
+        } else {
+            snprintf(d->server, sizeof d->server, "%s", s->host);
+            snprintf(d->path, sizeof d->path, "%s", s->mount_path[0] ? s->mount_path : "/");
+        }
         d->port = s->port ? s->port : 16384;
         d->prefer_tcp = s->transport == DRV_TCP;
         d->vf_node = -1;
         snprintf(d->status, sizeof d->status, "not connected yet");
+        vdrive_wait(d);
     }
 }
 
+static uint32_t tnfs_retries, tnfs_lost;    /* console n: how the network does */
+
 uint32_t net_vdrives(void) { return (uint32_t)nvd; }
 uint8_t net_vdrive_letter(uint32_t k) { return k < (uint32_t)nvd ? vd[k].letter : 0; }
+
+static int sd_state;                /* the SD card: see sd_mount() */
 
 uint32_t net_status_text(char *p, uint32_t max)
 {
@@ -501,10 +573,22 @@ uint32_t net_status_text(char *p, uint32_t max)
                       if (r_ > 0) n = n + (uint32_t)r_ < max ? n + (uint32_t)r_ : max - 1; } while (0)
     ADD("\r\nWi-Fi SSID : %s\r\nWi-Fi      : %s\r\n",
         g_net.ssid[0] ? g_net.ssid : "(not set)", wifi_status);
+    if (net_link_up()) {
+        int32_t rssi = 0;
+        cyw43_arch_lwip_begin();
+        int r = cyw43_wifi_get_rssi(&cyw43_state, &rssi);
+        cyw43_arch_lwip_end();
+        if (r == 0) ADD("Wi-Fi RSSI : %ld dBm\r\n", (long)rssi);
+    }
+    ADD("TNFS       : %lu retries, %lu requests without answer since start\r\n",
+        (unsigned long)tnfs_retries, (unsigned long)tnfs_lost);
+    ADD("TNFS writes: %s\r\n", sd_state > 0 ? "cached on the SD card (/.A2TCACHE)" : "via the server (no SD card)");
     if (!nvd) ADD("TNFS       : no drive configured\r\n");
-    for (int i = 0; i < nvd; i++)
-        ADD("TNFS %d     : %s:%u %s\r\n  %s\r\n%s", i + 1, vd[i].server, vd[i].port,
-            vd[i].path, vd[i].status, vd[i].dir);
+    for (int i = 0; i < nvd; i++) {
+        if (vd[i].sd) ADD("SD   %d     : %s\r\n  %s\r\n%s", i + 1, vd[i].path, vd[i].status, vd[i].dir);
+        else ADD("TNFS %d     : %s:%u %s\r\n  %s\r\n%s", i + 1, vd[i].server, vd[i].port,
+                 vd[i].path, vd[i].status, vd[i].dir);
+    }
 #undef ADD
     return n;
 }
@@ -581,7 +665,7 @@ static bool tcp_open(vdrive_t *d)
     /* the first SYN can be lost while ARP resolves the server; lwIP only
        retransmits after 3 s, so allow for that */
     absolute_time_t until = make_timeout_time_ms(10000);
-    while (d->tpcb && !d->tcp_up && !d->tcp_dead && !time_reached(until)) sleep_ms(5);
+    while (d->tpcb && !d->tcp_up && !d->tcp_dead && !time_reached(until)) net_sleep_ms(5);
     if (d->tcp_up) return true;
     printf("net: TCP connect to %s:%u failed (connect %d, error %d, %s)\n",
            ipaddr_ntoa(&d->ip), d->port, ce, d->tcp_last_err,
@@ -652,9 +736,12 @@ static int tnfs_req1(uint8_t cmd, const void *data, int dlen)
             }
             if (!d->use_tcp && rx_len) rx_len = 0;  /* stale UDP reply */
             if (d->use_tcp && d->tcp_dead) return -1;
-            sleep_ms(2);
+            net_sleep_ms(2);
         }
+        if (attempt + 1 < (d->use_tcp ? 1 : 4)) tnfs_retries++;
+        printf("net: TNFS %d: no answer to 0x%02x (try %d)\n", (int)(d - vd) + 1, cmd, attempt + 1);
     }
+    tnfs_lost++;
     return -1;
 }
 
@@ -680,10 +767,10 @@ static int tnfs_req(uint8_t cmd, const void *data, int dlen)
     if (!ok) { printf("net: TNFS %s: %s\n", d->server, d->status); return -1; }
     d->gen++;
     d->vf_node = -1;                        /* handles of the old session */
-    d->tmp_open = false;
+    if (!d->tmp_sd) d->tmp_open = false;    /* the one on the SD card stays valid */
     switch (cmd) {
-    case 0x10: case 0x13: case 0x14: case 0x24: case 0x26: case 0x28: case 0x29:
-        return tnfs_req1(cmd, data, dlen);  /* OPENDIR MKDIR RMDIR STAT UNLINK RENAME OPEN */
+    case 0x10: case 0x13: case 0x14: case 0x17: case 0x24: case 0x26: case 0x28: case 0x29:
+        return tnfs_req1(cmd, data, dlen);  /* OPENDIR MKDIR RMDIR OPENDIRX STAT UNLINK RENAME OPEN */
     default:
         return -1;
     }
@@ -712,7 +799,7 @@ static bool resolve_host(const char *host, ip_addr_t *ip)
     if (e == ERR_OK) { *ip = dns_ip; return true; }     /* cached */
     if (e == ERR_INPROGRESS) {
         absolute_time_t until = make_timeout_time_ms(5000);
-        while (!dns_state && !time_reached(until)) sleep_ms(10);
+        while (!dns_state && !time_reached(until)) net_sleep_ms(10);
         if (dns_state == 1) { *ip = dns_ip; return true; }
     }
     return false;
@@ -776,7 +863,7 @@ static bool ntp_sync(void)
         }
         cyw43_arch_lwip_end();
         absolute_time_t until = make_timeout_time_ms(2000);
-        while (!ntp_rx_unix && !time_reached(until)) sleep_ms(5);
+        while (!ntp_rx_unix && !time_reached(until)) net_sleep_ms(5);
         if (ntp_rx_unix) {
             clock_set(ntp_rx_unix);
             printf("net: [%lu ms] NTP time from %s\n", (unsigned long)(time_us_64() / 1000), g_set.ntp_server);
@@ -874,10 +961,13 @@ static uint32_t le32(const uint8_t *p) { return p[0] | (p[1] << 8) | (p[2] << 16
  *   2*SPF+1 .. +RDLEN      root directory
  *   DATREC ..              clusters 2..
  *
- * The whole tree below the mount point is scanned once after mounting and
- * every file and directory gets a fixed, contiguous run of clusters. The FAT
- * therefore never changes while GEMDOS has it cached. All drives share one
- * node table and name pool; each drive owns a contiguous range of it.
+ * After mounting only the root is read from the server. A folder is read
+ * when the Atari first reads one of its sectors (lazy): its entries become
+ * nodes, each with a fixed, contiguous run of clusters (a folder V_DIRCL).
+ * New runs only go into FAT sectors the Atari has not read since its reset:
+ * GEMDOS cannot have cached those, so the FAT it sees never changes under it.
+ * An Atari reset starts again from the root. All drives share one node table
+ * and name pool; each drive owns a fixed part of them.
  */
 #define V_SPC       2
 #define V_RES       1
@@ -887,6 +977,8 @@ static uint32_t le32(const uint8_t *p) { return p[0] | (p[1] << 8) | (p[2] << 16
 #define V_DATREC    (V_RES + 2 * V_SPF + V_RDLEN)
 #define V_NCL       ((VFAT_SECTORS - V_DATREC) / V_SPC)
 #define V_CLBYTES   (V_SPC * 512)
+#define V_DIRCL     8               /* a folder: 8 KB, 254 entries besides . and .. */
+#define V_DIRENT    (V_DIRCL * V_CLBYTES / 32 - 2)
 
 #define VNODES      1024
 
@@ -906,10 +998,10 @@ typedef struct {
 #define VF_RO       0x01            /* no write permission on the server     */
 #define VF_DEL      0x02            /* deleted on the server                 */
 #define VF_SEEN     0x04            /* found again by the current sync       */
+#define VF_LOADED   0x08            /* folder: entries read from the server  */
+#define VF_HIDE     0x10            /* no clusters left: shown as deleted    */
 
 #define TMP_NAME    "/.A2T.TMP"     /* hidden: the scan skips names with '.' */
-#define NODE_SPARE  64              /* room per drive for new files and dirs */
-#define POOL_SPARE  2048
 
 /* per drive: sector written since the scan (data in TMP_NAME), and since the
    last sync */
@@ -918,11 +1010,8 @@ static uint8_t dbits[VDRIVES_MAX][(VFAT_SECTORS + 7) / 8];
 #define BIT(m, r)   ((m)[(r) >> 3] & (1u << ((r) & 7)))
 
 static vnode_t  vn[VNODES];
-static uint16_t vn_count;
-static char     vpool[32768];
-static uint32_t vpool_len;
+static char     vpool[32768];       /* vpool[0] = "": the name of every root */
 static uint16_t valloc[VNODES];     /* nodes that own clusters, per drive in cluster order */
-static uint16_t valloc_n;
 
 static char *vname(uint16_t i) { return vpool + vn[i].name_off; }
 
@@ -972,8 +1061,8 @@ static void make83(uint16_t d, const char *name, char out[11])
         }
         memcpy(out + 8, ext, (size_t)el);
         bool clash = false;
-        /* siblings so far; the node being named is the last one (vn_count - 1) */
-        for (uint16_t k = vn[d].child_start; k + 1 < vn_count; k++)
+        /* siblings so far; the node being named is the last one (node_end - 1) */
+        for (uint16_t k = vn[d].child_start; k + 1 < cur->node_end; k++)
             if (!memcmp(vn[k].n83, out, 11)) { clash = true; break; }
         if (!clash) return;
     }
@@ -992,15 +1081,166 @@ static bool tnfs_stat(const char *path, uint32_t *size, uint32_t *mtime, bool *i
     return true;
 }
 
-static void vscan_dir(uint16_t d)
+/* room for one more entry in directory d of the current drive? */
+static bool vscan_room(uint16_t d, const char *name)
+{
+    vdrive_t *dr = cur;
+    uint32_t max = d == dr->root ? V_ROOTENT - 1 : V_DIRENT;
+    if (dr->node_end < dr->node_limit && vn[d].child_count < max &&
+        dr->pool_end + strlen(name) + 1 <= dr->pool_limit) return true;
+    dr->skipped++;
+    return false;
+}
+
+/* a new node for an entry of directory d (vscan_room said yes) */
+static void vscan_add(uint16_t d, const char *name, bool isdir, uint32_t size,
+                      uint32_t mtime, bool ro)
+{
+    vdrive_t *dr = cur;
+    uint16_t i = dr->node_end++;
+    memset(&vn[i], 0, sizeof vn[i]);
+    vn[i].parent = d;
+    vn[i].isdir = isdir;
+    vn[i].flags = ro && !isdir ? VF_RO : 0;
+    vn[i].size = isdir ? 0 : size;
+    vn[i].mtime = mtime;
+    vn[i].name_off = dr->pool_end;
+    strcpy(vpool + dr->pool_end, name);
+    dr->pool_end += (uint32_t)strlen(name) + 1;
+    make83(d, name, vn[i].n83);
+    vn[d].child_count++;
+    if (isdir) dr->dirs++; else dr->files++;
+}
+
+/* OPENDIRX/READDIRX (TNFS 1.2): names with size, time and type, as many as
+   fit in one reply. false: OPENDIRX failed (the server may not have it). */
+static bool vscan_dirx(uint16_t d, const char *path)
+{
+    static uint8_t req[5 + 256];
+    static char name[128];
+    req[0] = 0;                                             /* skip ., .., hidden */
+    req[1] = 0;                                             /* default sort */
+    req[2] = req[3] = 0;                                    /* all entries */
+    req[4] = 0;                                             /* no pattern */
+    int pl = (int)strlen(path);
+    memcpy(req + 5, path, (size_t)pl + 1);
+    int n = tnfs_req(0x17, req, 5 + pl + 1);                /* OPENDIRX */
+    if (n < 8 || rx[4] != 0) return false;
+    uint8_t h = rx[5];
+    for (bool eof = false; !eof; ) {
+        uint8_t q[2] = { h, 0 };                            /* 0: as many as fit */
+        n = tnfs_req(0x18, q, 2);                           /* READDIRX */
+        if (n < 9 || rx[4] != 0) break;                     /* EOF or error */
+        int count = rx[5], p = 9;
+        eof = rx[6] & 0x01;
+        for (int k = 0; k < count && p + 14 <= n; k++) {
+            bool isdir = rx[p] & 0x01;
+            uint32_t size = le32(rx + p + 1), mtime = le32(rx + p + 5);
+            p += 13;                                        /* flags size mtime ctime */
+            int e = p;
+            while (e < n && rx[e]) e++;
+            if (e >= n) break;
+            snprintf(name, sizeof name, "%s", (const char *)rx + p);
+            p = e + 1;
+            if (name[0] != '.' && vscan_room(d, name)) vscan_add(d, name, isdir, size, mtime, false);
+        }
+    }
+    tnfs_req(0x12, &h, 1);                                  /* CLOSEDIR */
+    return true;
+}
+
+/* the entries of directory node d become nodes at the end of the drive's
+   part of the table (contiguous). false: the server could not open it. */
+/* ---------------- SD card drives (FatFs) ----------------
+ * A folder on the card (the drive's path, e.g. /hd) is the drive's root.
+ * Names, sizes and times come from FatFs as from READDIRX; hidden and system
+ * entries (System Volume Information) are left out like names with a dot.
+ */
+static FATFS sd_fs;
+static int   sd_state;          /* 0 not tried, 1 mounted, -1 no card / not readable */
+
+static bool sd_mount(void)
+{
+    if (!sd_state) sd_state = f_mount(&sd_fs, "", 1) == FR_OK ? 1 : -1;
+    return sd_state > 0;
+}
+
+/* the card's path of rel ("/" or "/a/b") on the current drive */
+static void sd_full(char *out, int max, const char *rel)
+{
+    snprintf(out, (size_t)max, "%s%s", strcmp(cur->path, "/") ? cur->path : "",
+             strcmp(rel, "/") || !strcmp(cur->path, "/") ? rel : "");
+}
+
+/* FAT date and time -> unix time (as dos_time() goes back) */
+static uint32_t fat_unix(uint16_t date, uint16_t time)
+{
+    int32_t y = 1980 + (date >> 9), m = (date >> 5) & 15, d = date & 31;
+    if (m < 1 || m > 12) m = 1;
+    if (d < 1) d = 1;
+    y -= m <= 2;                                    /* days from civil (Howard Hinnant) */
+    int32_t era = y / 400;
+    uint32_t yoe = (uint32_t)(y - era * 400);
+    uint32_t doy = (uint32_t)(153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + (uint32_t)d - 1;
+    uint32_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    int32_t days = era * 146097 + (int32_t)doe - 719468;
+    return (uint32_t)days * 86400u + (time >> 11) * 3600u + ((time >> 5) & 63) * 60u + (time & 31) * 2u;
+}
+
+static bool vscan_sd(uint16_t d, const char *rel)
+{
+    static char full[300];
+    static FILINFO fi;
+    DIR dir;
+    sd_full(full, sizeof full, rel);
+    if (f_opendir(&dir, full) != FR_OK) return false;
+    while (f_readdir(&dir, &fi) == FR_OK && fi.fname[0]) {
+        if (fi.fname[0] == '.' || (fi.fattrib & (AM_HID | AM_SYS))) continue;
+        if (!vscan_room(d, fi.fname)) continue;
+        uint32_t size = fi.fsize > 0xffffffffu ? 0xffffffffu : (uint32_t)fi.fsize;
+        vscan_add(d, fi.fname, (fi.fattrib & AM_DIR) != 0, size, fat_unix(fi.fdate, fi.ftime),
+                  (fi.fattrib & AM_RDO) != 0);
+    }
+    f_closedir(&dir);
+    return true;
+}
+
+static void vfile_close(void);
+
+static bool vfile_read_sd(uint16_t node, uint32_t off, uint8_t *dst, uint32_t len)
+{
+    static char rel[256], full[300];
+    vdrive_t *d = cur;
+    if (d->vf_node != node) {
+        vfile_close();
+        vpath(node, rel, sizeof rel);
+        sd_full(full, sizeof full, rel);
+        if (f_open(&d->vf_fil, full, FA_READ) != FR_OK) return false;
+        d->vf_node = node;
+        d->vf_pos = 0;
+    }
+    if (off != d->vf_pos && f_lseek(&d->vf_fil, off) != FR_OK) { vfile_close(); return false; }
+    UINT got = 0;
+    if (f_read(&d->vf_fil, dst, len, &got) != FR_OK) { vfile_close(); return false; }
+    d->vf_pos = off + got;                          /* past the end: zeros (buf is cleared) */
+    return true;
+}
+
+static bool vscan_dir(uint16_t d)
 {
     static char path[256], child[320];      /* not reentrant: keep off the stack */
     vdrive_t *dr = cur;
     vpath(d, path, sizeof path);
-    vn[d].child_start = vn_count;
+    vn[d].child_start = dr->node_end;
     vn[d].child_count = 0;
+    if (dr->sd) return vscan_sd(d, path);
+    if (!dr->no_dirx && vscan_dirx(d, path)) return true;
     int n = tnfs_req(0x10, path, (int)strlen(path) + 1);    /* OPENDIR */
-    if (n < 6 || rx[4] != 0) return;
+    if (n < 6 || rx[4] != 0) return false;
+    if (!dr->no_dirx) {                     /* OPENDIRX failed, OPENDIR works */
+        dr->no_dirx = true;
+        printf("net: TNFS %d: no READDIRX, reading folders the slow way\n", (int)(dr - vd) + 1);
+    }
     uint8_t h = rx[5];
     for (;;) {
         n = tnfs_req(0x11, &h, 1);                          /* READDIR */
@@ -1009,27 +1249,15 @@ static void vscan_dir(uint16_t d)
         static char name[128];
         snprintf(name, sizeof name, "%s", (const char *)rx + 5);
         if (name[0] == '.') continue;                       /* ., .., hidden */
-        if (vn_count >= dr->node_limit || (d == dr->root && vn[d].child_count >= V_ROOTENT - 1) ||
-            vpool_len + strlen(name) + 1 > dr->pool_limit) { dr->skipped++; continue; }
+        if (!vscan_room(d, name)) continue;
         snprintf(child, sizeof child, "%s%s%s", path, strcmp(path, "/") ? "/" : "", name);
         uint32_t size = 0, mtime = 0;
         bool isdir = false, ro = false;
         if (!tnfs_stat(child, &size, &mtime, &isdir, &ro)) { dr->skipped++; continue; }
-        uint16_t i = vn_count++;
-        memset(&vn[i], 0, sizeof vn[i]);
-        vn[i].parent = d;
-        vn[i].isdir = isdir;
-        vn[i].flags = ro && !isdir ? VF_RO : 0;
-        vn[i].size = isdir ? 0 : size;
-        vn[i].mtime = mtime;
-        vn[i].name_off = vpool_len;
-        strcpy(vpool + vpool_len, name);
-        vpool_len += (uint32_t)strlen(name) + 1;
-        make83(d, name, vn[i].n83);
-        vn[d].child_count++;
-        if (isdir) dr->dirs++; else dr->files++;
+        vscan_add(d, name, isdir, size, mtime, ro);
     }
     tnfs_req(0x12, &h, 1);                                  /* CLOSEDIR */
+    return true;
 }
 
 /* signature of a cluster chain: changes with any cluster or the length */
@@ -1042,60 +1270,88 @@ static uint32_t run_sig(uint32_t first, uint32_t n)
     return s;
 }
 
-/* scan the current drive into the next free part of the node table */
+/* first cluster of a new run of ncl clusters, 0 = no room. Runs go up, and
+   only into FAT sectors (256 clusters each) the Atari has not read since its
+   reset: GEMDOS may have cached the ones it read. Clusters skipped this way
+   stay free; GEMDOS can only take them after reading their FAT sector. */
+static uint32_t vrun(uint32_t ncl)
+{
+    vdrive_t *d = cur;
+    uint32_t c = d->next_cl;
+    for (;;) {
+        if (c + ncl > V_NCL + 2) return 0;
+        uint32_t s = c / 256, s1 = (c + ncl - 1) / 256;
+        while (s <= s1 && !(d->fseen >> s & 1)) s++;
+        if (s > s1) break;
+        c = (s + 1) * 256;                  /* past the FAT sector it has seen */
+    }
+    d->next_cl = c + ncl;
+    return c;
+}
+
+/* read folder node dir from the server: every entry gets its cluster run,
+   a folder V_DIRCL, a file its size. false: the server could not open it. */
+static bool vdir_load(uint16_t dir)
+{
+    vdrive_t *d = cur;
+    uint32_t skipped0 = d->skipped;
+    if (!vscan_dir(dir)) return false;
+    vn[dir].flags |= VF_LOADED;
+    uint16_t i0 = vn[dir].child_start;
+    for (uint16_t i = i0; i < i0 + vn[dir].child_count; i++) {
+        vnode_t *v = &vn[i];
+        uint32_t ncl = v->isdir ? V_DIRCL : (v->size + V_CLBYTES - 1) / V_CLBYTES;
+        uint32_t c = ncl ? vrun(ncl) : 0;
+        if (ncl && !c) {                    /* does not fit this session */
+            v->flags |= VF_HIDE;
+            d->skipped++;
+            ncl = 0;
+        }
+        v->first_cl = v->start_cl = (uint16_t)c;
+        v->ncl = (uint16_t)ncl;
+        v->sig = run_sig(c, ncl);
+        if (ncl) valloc[d->va0 + d->van++] = i;
+    }
+    if (dir != d->root) {
+        static char p[256];
+        vpath(dir, p, sizeof p);
+        printf("net: %s %d: read %s: %u entries, clusters up to %lu, nodes %u/%u%s\n",
+               d->sd ? "SD" : "TNFS", (int)(d - vd) + 1, p, vn[dir].child_count, (unsigned long)d->next_cl,
+               d->node_end - d->root, d->node_limit - d->root,
+               d->skipped != skipped0 ? " (some skipped)" : "");
+    }
+    return true;
+}
+
+static void vfile_close(void);
+static void tnfs_close(uint8_t h);
+static void fs_close(uint8_t h);
+static void tmp_close(vdrive_t *d);
+
+/* the current drive's tree from scratch: only the root (after mounting and
+   at every Atari reset); folders follow when the Atari reads them */
 static void vfat_scan(void)
 {
     vdrive_t *d = cur;
-    int left = nvd - (int)(d - vd);                         /* this and later drives */
     d->ready = false;
+    vfile_close();
+    tmp_close(d);
+    d->tmp_used = d->wr_pending = false;
     d->files = d->dirs = d->skipped = 0;
-    d->root = vn_count;
-    d->node_limit = (uint16_t)(vn_count + (VNODES - vn_count) / left);
-    d->pool_limit = vpool_len + (uint32_t)(sizeof vpool - vpool_len) / (uint32_t)left;
-    uint16_t r = vn_count++;
+    uint16_t r = d->root;
+    d->node_end = r + 1;
+    d->pool_end = d->pool_start;
+    d->van = 0;
+    d->next_cl = 2;
+    d->fseen = 0;
     memset(&vn[r], 0, sizeof vn[r]);
     vn[r].parent = r;
     vn[r].isdir = 1;
     vn[r].name_off = 0;                                     /* vpool[0] = "" */
-
-    /* breadth first: children of a directory are contiguous in vn[] */
-    for (uint16_t i = r; i < vn_count; i++) {
-        if (!vn[i].isdir) continue;
-        snprintf(d->status, sizeof d->status, "scanning... %lu files, %lu dirs",
-                 (unsigned long)d->files, (unsigned long)d->dirs);
-        vscan_dir(i);
-    }
-    d->node_end = vn_count;
-
-    /* fixed cluster runs, in node order */
-    uint32_t next = 2;
-    d->va0 = valloc_n;
-    for (uint16_t i = r + 1; i < vn_count; i++) {
-        uint32_t bytes = vn[i].isdir ? (uint32_t)(vn[i].child_count + 2) * 32 : vn[i].size;
-        uint32_t ncl = (bytes + V_CLBYTES - 1) / V_CLBYTES;
-        if (next + ncl > V_NCL + 2) {                       /* does not fit: hide */
-            ncl = 0;
-            vn[i].size = 0;
-            d->skipped++;
-        }
-        vn[i].first_cl = vn[i].start_cl = ncl ? (uint16_t)next : 0;
-        vn[i].ncl = (uint16_t)ncl;
-        vn[i].sig = run_sig(vn[i].first_cl, ncl);
-        if (ncl) valloc[valloc_n++] = i;
-        next += ncl;
-    }
-    d->van = (uint16_t)(valloc_n - d->va0);
-
-    /* keep room for files and directories the Atari creates */
-    d->pool_end = vpool_len;
-    if (d->node_limit > d->node_end + NODE_SPARE) d->node_limit = (uint16_t)(d->node_end + NODE_SPARE);
-    if (d->pool_limit > d->pool_end + POOL_SPARE) d->pool_limit = d->pool_end + POOL_SPARE;
-    vn_count = d->node_limit;
-    vpool_len = d->pool_limit;
+    vdir_load(r);
     int k = (int)(d - vd);
     memset(wbits[k], 0, sizeof wbits[k]);
     memset(dbits[k], 0, sizeof dbits[k]);
-    d->tmp_open = d->tmp_used = d->wr_pending = false;
     __dmb();
     d->ready = true;
 }
@@ -1165,6 +1421,7 @@ static void vdir_entry(uint16_t d, uint32_t k, uint8_t *e)
     }
     if (k >= vn[d].child_count) return;
     const vnode_t *v = &vn[vn[d].child_start + k];
+    if (v->flags & VF_HIDE) { e[0] = 0xe5; return; }        /* no clusters: "deleted" */
     vdirent(e, v->n83, v->isdir ? 0x10 : (v->flags & VF_RO) ? 0x01 : 0x00,
             v->mtime, v->first_cl, v->size);
 }
@@ -1173,13 +1430,15 @@ static void vdir_entry(uint16_t d, uint32_t k, uint8_t *e)
 static void vfile_close(void)
 {
     vdrive_t *d = cur;
-    if (d->vf_node >= 0 && d->mounted) tnfs_req(0x23, &d->vf_handle, 1);   /* CLOSE */
+    if (d->vf_node >= 0 && d->sd) f_close(&d->vf_fil);
+    else if (d->vf_node >= 0 && d->mounted) tnfs_req(0x23, &d->vf_handle, 1);   /* CLOSE */
     d->vf_node = -1;
 }
 
 static bool vfile_read1(uint16_t node, uint32_t off, uint8_t *dst, uint32_t len)
 {
     vdrive_t *d = cur;
+    if (d->sd) return vfile_read_sd(node, off, dst, len);
     if (d->vf_node != node) {
         vfile_close();
         uint8_t req[300];
@@ -1287,34 +1546,188 @@ static bool tnfs_rename(const char *from, const char *to)
     return n >= 5 && rx[4] == 0;
 }
 
-/* one sector of TMP_NAME */
+/* ---------------- file operations on the current drive: TNFS or SD ----------------
+ * The write side (the hidden sector file, vbuild, vsync) goes through these.
+ * On an SD drive they are FatFs calls, with paths relative to the drive's
+ * folder on the card; handles 1..SD_FILES index sd_fil[].
+ */
+#define SD_FILES 4
+
+static FIL     sd_fil[SD_FILES];
+static bool    sd_fil_used[SD_FILES];
+static FRESULT sd_err;
+
+static const char *fs_err(void)
+{
+    static char b[20];
+    if (!cur->sd) return tnfs_err(rx[4]);
+    snprintf(b, sizeof b, "FatFs error %d", (int)sd_err);
+    return b;
+}
+
+static FIL *sd_h(uint8_t h) { return h >= 1 && h <= SD_FILES ? &sd_fil[h - 1] : NULL; }
+
+/* files on the card by their full path, handles 1..SD_FILES */
+static bool sdf_open(const char *full, BYTE mode, uint8_t *h)
+{
+    int k = 0;
+    while (k < SD_FILES && sd_fil_used[k]) k++;
+    if (k == SD_FILES) { sd_err = FR_TOO_MANY_OPEN_FILES; return false; }
+    if ((sd_err = f_open(&sd_fil[k], full, mode)) != FR_OK) return false;
+    sd_fil_used[k] = true;
+    *h = (uint8_t)(k + 1);
+    return true;
+}
+
+static bool sdf_seek(uint8_t h, uint32_t off)
+{
+    FIL *f = sd_h(h);
+    return f && (sd_err = f_lseek(f, off)) == FR_OK;
+}
+
+static bool sdf_write(uint8_t h, const uint8_t *buf, uint16_t len)
+{
+    FIL *f = sd_h(h);
+    UINT n = 0;
+    return f && (sd_err = f_write(f, buf, len, &n)) == FR_OK && n == len;
+}
+
+static bool sdf_read(uint8_t h, uint8_t *buf, uint16_t len, uint16_t *got)
+{
+    FIL *f = sd_h(h);
+    UINT n = 0;
+    if (!f || (sd_err = f_read(f, buf, len, &n)) != FR_OK) return false;
+    *got = (uint16_t)n;
+    return true;
+}
+
+static void sdf_close(uint8_t h)
+{
+    FIL *f = sd_h(h);
+    if (!f || !sd_fil_used[h - 1]) return;
+    f_close(f);
+    sd_fil_used[h - 1] = false;
+}
+
+static bool fs_open(const char *path, uint16_t flags, uint8_t *h)
+{
+    static char full[300];
+    if (!cur->sd) return tnfs_open(path, flags, h);
+    sd_full(full, sizeof full, path);
+    BYTE mode = (flags & TO_RDWR) == TO_RDWR ? FA_READ | FA_WRITE : FA_WRITE;
+    mode |= (flags & TO_TRUNC) ? FA_CREATE_ALWAYS : (flags & TO_CREAT) ? FA_OPEN_ALWAYS : FA_OPEN_EXISTING;
+    return sdf_open(full, mode, h);
+}
+
+static bool fs_seek(uint8_t h, uint32_t off)
+{
+    return cur->sd ? sdf_seek(h, off) : tnfs_seek(h, off);
+}
+
+static bool fs_write(uint8_t h, const uint8_t *buf, uint16_t len)
+{
+    return cur->sd ? sdf_write(h, buf, len) : tnfs_write(h, buf, len);
+}
+
+/* up to 512 bytes; *got = bytes read (0 at the end) */
+static bool fs_read(uint8_t h, uint8_t *buf, uint16_t len, uint16_t *got)
+{
+    if (cur->sd) return sdf_read(h, buf, len, got);
+    uint8_t req[3] = { h, (uint8_t)(len & 0xff), (uint8_t)(len >> 8) };
+    int n = tnfs_req(0x21, req, 3);                         /* READ */
+    if (n < 7 || rx[4] != 0) return false;
+    uint16_t g = le16(rx + 5);
+    if (g > len || g > n - 7) return false;
+    memcpy(buf, rx + 7, g);
+    *got = g;
+    return true;
+}
+
+static void fs_close(uint8_t h)
+{
+    if (cur->sd) sdf_close(h);
+    else tnfs_close(h);
+}
+
+/* 0x26 UNLINK, 0x13 MKDIR, 0x14 RMDIR */
+static bool fs_path(uint8_t cmd, const char *path)
+{
+    static char full[300];
+    if (!cur->sd) return tnfs_path(cmd, path);
+    sd_full(full, sizeof full, path);
+    sd_err = cmd == 0x13 ? f_mkdir(full) : f_unlink(full);  /* f_unlink: files and empty folders */
+    return sd_err == FR_OK;
+}
+
+static bool fs_rename(const char *from, const char *to)
+{
+    static char a[300], b[300];
+    if (!cur->sd) return tnfs_rename(from, to);
+    sd_full(a, sizeof a, from);
+    sd_full(b, sizeof b, to);
+    return (sd_err = f_rename(a, b)) == FR_OK;
+}
+
+/* ---------------- the hidden sector file of a drive ----------------
+ * Every sector the Atari writes lives here until vsync has put it into the
+ * files. An SD drive keeps it in its own folder (TMP_NAME). A TNFS drive
+ * keeps it on the SD card when there is one (/.A2TCACHE/T<n>.TMP: the Atari
+ * then waits for the card, not for a TNFS WRITE per sector), else on the
+ * server (TMP_NAME).
+ */
+#define SD_CACHE_DIR "/.A2TCACHE"
+
+static bool tmp_open1(vdrive_t *d)
+{
+    uint16_t fl = TO_RDWR | TO_CREAT | (d->tmp_used ? 0 : TO_TRUNC);
+    d->tmp_sd = false;
+    if (!d->sd && sd_state > 0) {
+        static char full[40];
+        FRESULT r = f_mkdir(SD_CACHE_DIR);
+        if (r == FR_OK || r == FR_EXIST) {
+            snprintf(full, sizeof full, SD_CACHE_DIR "/T%d.TMP", (int)(d - vd) + 1);
+            d->tmp_sd = sdf_open(full, FA_READ | FA_WRITE | (d->tmp_used ? FA_OPEN_ALWAYS : FA_CREATE_ALWAYS),
+                                 &d->tmp_handle);
+        }
+        if (!d->tmp_sd) printf("net: TNFS %d: write cache on the SD card failed (FatFs %d), using the server\n",
+                               (int)(d - vd) + 1, (int)(d->tmp_sd ? 0 : sd_err));
+    }
+    if (!d->tmp_sd && !fs_open(TMP_NAME, fl, &d->tmp_handle)) {
+        printf("net: cannot create %s: %s\n", TMP_NAME, fs_err());
+        return false;
+    }
+    d->tmp_open = d->tmp_used = true;
+    return true;
+}
+
+static void tmp_close(vdrive_t *d)
+{
+    if (d->tmp_open) {
+        if (d->tmp_sd) sdf_close(d->tmp_handle);
+        else if (d->sd || d->mounted) fs_close(d->tmp_handle);
+    }
+    d->tmp_open = false;
+}
+
+/* one sector of the hidden file */
 static bool tmp_io1(uint32_t rel, uint8_t *buf, bool write)
 {
     vdrive_t *d = cur;
-    if (!d->tmp_open) {
-        uint16_t fl = TO_RDWR | TO_CREAT | (d->tmp_used ? 0 : TO_TRUNC);
-        if (!tnfs_open(TMP_NAME, fl, &d->tmp_handle)) {
-            printf("net: cannot create %s: %s (0x%02x)\n", TMP_NAME, tnfs_err(rx[4]), rx[4]);
-            return false;
-        }
-        d->tmp_open = d->tmp_used = true;
-    }
-    if (!tnfs_seek(d->tmp_handle, rel * 512u)) return false;
-    if (write) return tnfs_write(d->tmp_handle, buf, 512);
-    uint8_t req[3] = { d->tmp_handle, 0x00, 0x02 };        /* 512 bytes */
-    int n = tnfs_req(0x21, req, 3);
-    if (n < 7 || rx[4] != 0) return false;
-    uint16_t got = le16(rx + 5);
-    if (got > 512 || got > n - 7) return false;
-    memcpy(buf, rx + 7, got);
-    return true;
+    uint16_t got;
+    if (!d->tmp_open && !tmp_open1(d)) return false;
+    if (d->tmp_sd)
+        return sdf_seek(d->tmp_handle, rel * 512u) &&
+               (write ? sdf_write(d->tmp_handle, buf, 512) : sdf_read(d->tmp_handle, buf, 512, &got));
+    if (!fs_seek(d->tmp_handle, rel * 512u)) return false;
+    if (write) return fs_write(d->tmp_handle, buf, 512);
+    return fs_read(d->tmp_handle, buf, 512, &got);
 }
 
 static bool tmp_io(uint32_t rel, uint8_t *buf, bool write)
 {
     uint8_t gen = cur->gen;
     if (tmp_io1(rel, buf, write)) return true;
-    return cur->gen != gen && tmp_io1(rel, buf, write);         /* new session */
+    return cur->gen != gen && !cur->tmp_sd && tmp_io1(rel, buf, write);   /* new session */
 }
 
 static bool vfat_write(uint32_t rel, const uint8_t *buf)
@@ -1335,7 +1748,16 @@ static bool vfat_write(uint32_t rel, const uint8_t *buf)
 static void vdrive_fail(int i, const char *reason)
 {
     vdrive_t *d = &vd[i];
-    int n = snprintf(d->errtxt, sizeof d->errtxt,
+    int n = d->sd ? snprintf(d->errtxt, sizeof d->errtxt,
+                     "ACSI2TNFS: SD card drive not available\r\n"
+                     "\r\n"
+                     "Reason : %s\r\n"
+                     "Folder : %s\r\n"
+                     "\r\n"
+                     "Use a card formatted FAT32 or exFAT on a PC, with this\r\n"
+                     "folder on it, then press N on the USB console of the\r\n"
+                     "adapter or restart it.\r\n", reason, d->path)
+                  : snprintf(d->errtxt, sizeof d->errtxt,
                      "ACSI2TNFS: network drive not available\r\n"
                      "\r\n"
                      "Reason : %s\r\n"
@@ -1358,8 +1780,7 @@ static bool vfat_sector(uint32_t rel, uint8_t *buf)
     vdrive_t *d = cur;
     memset(buf, 0, 512);
     if (rel == 0) { vfat_bootsector(buf); return true; }
-    if (!d->ready) {                                        /* NET_ERR.TXT or empty */
-        if (!d->failed) return true;
+    if (!d->ready) {                                        /* NET_ERR.TXT or NET_WAIT.TXT */
         if (rel < 1 + 2 * V_SPF) {
             if ((rel - 1) % V_SPF == 0) {                   /* clusters 0, 1 and 2 */
                 put16(buf, 0xfff8);
@@ -1367,7 +1788,8 @@ static bool vfat_sector(uint32_t rel, uint8_t *buf)
                 put16(buf + 4, 0xffff);
             }
         } else if (rel == 1 + 2 * V_SPF) {                  /* first root sector */
-            vdirent(buf, "NET_ERR TXT", 0x01, 0, 2, d->errlen);
+            vdirent(buf, !d->failed ? "NET_WAITTXT" : d->sd ? "SD_ERR  TXT" : "NET_ERR TXT",
+                    0x01, 0, 2, d->errlen);
         } else if (rel == V_DATREC) {                       /* cluster 2 */
             memcpy(buf, d->errtxt, d->errlen);
         }
@@ -1402,6 +1824,8 @@ static bool vfat_sector(uint32_t rel, uint8_t *buf)
     if (nd < 0 || (vn[nd].flags & VF_DEL)) return true;     /* free or deleted: zeros */
     uint32_t off = ((c - vn[nd].first_cl) * V_SPC + s) * 512;
     if (vn[nd].isdir) {
+        /* the first look into this folder: read it from the server now */
+        if (!(vn[nd].flags & VF_LOADED) && !vdir_load((uint16_t)nd)) return false;
         for (uint32_t k = 0; k < 16; k++) vdir_entry((uint16_t)nd, off / 32 + k, buf + k * 32);
         return true;
     }
@@ -1426,13 +1850,38 @@ static void vreq_service(void)
     vdrive_t *save = cur;
     bool ok = vreq_drive < (uint32_t)nvd;
     if (ok) cur = &vd[vreq_drive];
-    for (uint32_t i = 0; i < vreq_n && ok; i++)
-        ok = vreq_write ? vfat_write(vreq_rel + i, vreq_buf + i * 512)
-                        : vfat_sector(vreq_rel + i, vreq_buf + i * 512);
+    /* after an Atari reset, until the trees are read again (net_poll): as
+       not ready, so the fresh GEMDOS caches nothing of the old tree. A sync
+       running meanwhile still sees the old tree. */
+    bool held = ok && atari_reset && cur->ready;
+    if (held) cur->ready = false;
+    for (uint32_t i = 0; i < vreq_n && ok; i++) {
+        uint32_t rel = vreq_rel + i;
+        ok = vreq_write ? vfat_write(rel, vreq_buf + i * 512)
+                        : vfat_sector(rel, vreq_buf + i * 512);
+        /* a FAT sector the Atari has now: no new cluster runs in it (vrun) */
+        if (ok && cur->ready && rel >= 1 && rel < 1 + 2 * V_SPF)
+            cur->fseen |= 1ull << ((rel - 1) % V_SPF);
+    }
+    if (held) cur->ready = true;
     if (vreq_write) fsec_rel = -1;          /* the FAT may have changed */
     cur = save;
     __dmb();
     vreq_state = ok ? 2 : 3;
+}
+
+/* core0 waits for the network (Wi-Fi, DNS, NTP, a TNFS reply): meanwhile
+   answer the Atari for the TNFS drives that are not ready yet. They show
+   NET_WAIT.TXT or NET_ERR.TXT and need no network. HDDRIVER does not wait
+   for us at boot as our driver does, and would time out on them. */
+static void net_sleep_ms(uint32_t ms)
+{
+    absolute_time_t until = make_timeout_time_ms(ms);
+    do {
+        if (vreq_state == 1 && (vreq_drive >= (uint32_t)nvd || !vd[vreq_drive].ready))
+            vreq_service();
+        sleep_ms(1);
+    } while (!time_reached(until));
 }
 
 /* sectors written since the last sync, as taken over by the running sync;
@@ -1512,6 +1961,7 @@ static int vnode_new(uint16_t dir, const char *n83, bool isdir)
     memset(&vn[i], 0, sizeof vn[i]);
     if (!vnode_place(i, dir, n83)) return -1;
     vn[i].isdir = isdir;
+    vn[i].flags = isdir ? VF_LOADED : 0;                    /* new: nothing on the server */
     vn[i].start_cl = 0xffff;                                /* never synced */
     vn[i].size = 0xffffffffu;
     d->node_end++;
@@ -1527,6 +1977,7 @@ static bool vbuild(uint16_t n, uint32_t c, uint32_t size)
     static uint8_t sec[512];
     const uint8_t *wb = wbits[cur - vd];
     vpath(n, path, sizeof path);
+    vfile_close();                          /* the read cache may have this file open */
 
     bool direct = true;
     uint32_t left = size, cc = c;
@@ -1542,8 +1993,8 @@ static bool vbuild(uint16_t n, uint32_t c, uint32_t size)
         snprintf(tmp + k, sizeof tmp - (size_t)k, "%s.A2T.NEW", k > 1 ? "/" : "");
     }
     uint8_t h;
-    if (!tnfs_open(tmp, TO_WRONLY | TO_CREAT | TO_TRUNC, &h)) {
-        printf("sync: cannot create %s: %s (0x%02x)\n", tmp, tnfs_err(rx[4]), rx[4]);
+    if (!fs_open(tmp, TO_WRONLY | TO_CREAT | TO_TRUNC, &h)) {
+        printf("sync: cannot create %s: %s\n", tmp, fs_err());
         return false;
     }
     bool ok = true;
@@ -1551,16 +2002,16 @@ static bool vbuild(uint16_t n, uint32_t c, uint32_t size)
     for (uint32_t i = 0; ok && left && valid_cl(cc) && i < V_NCL; i++, cc = vfat_get(cc))
         for (uint32_t s = 0; ok && s < V_SPC && left; s++) {
             uint16_t len = left > 512 ? 512 : (uint16_t)left;
-            ok = vfat_sector(V_DATREC + (cc - 2) * V_SPC + s, sec) && tnfs_write(h, sec, len);
+            ok = vfat_sector(V_DATREC + (cc - 2) * V_SPC + s, sec) && fs_write(h, sec, len);
             left -= len;
             vreq_service();
         }
-    tnfs_close(h);
+    fs_close(h);
     if (left) ok = false;                                   /* FAT not complete (yet) */
     if (ok && !direct) {
         vfile_close();
-        tnfs_path(0x26, path);                              /* old version, if any */
-        ok = tnfs_rename(tmp, path);
+        fs_path(0x26, path);                                /* old version, if any */
+        ok = fs_rename(tmp, path);
     }
     return ok;
 }
@@ -1587,8 +2038,8 @@ static void vsync_entry(uint16_t dir, const uint8_t *e, uint16_t *queue, int *nq
             vpath(i, path, sizeof path);
             child_path(dir, n83, path2, sizeof path2);
             vfile_close();
-            bool ok = tnfs_rename(path, path2);
-            printf("sync: rename %s -> %s %s\n", path, path2, ok ? "ok" : tnfs_err(rx[4]));
+            bool ok = fs_rename(path, path2);
+            printf("sync: rename %s -> %s %s\n", path, path2, ok ? "ok" : fs_err());
             (*acts)++;
             if (ok && vnode_place(i, dir, n83)) n = i;
         }
@@ -1597,15 +2048,17 @@ static void vsync_entry(uint16_t dir, const uint8_t *e, uint16_t *queue, int *nq
         if (n < 0) { printf("sync: no room for %.11s\n", n83); return; }
         if (isdir) {
             vpath((uint16_t)n, path, sizeof path);
-            bool ok = tnfs_path(0x13, path);
-            printf("sync: mkdir %s %s\n", path, ok ? "ok" : tnfs_err(rx[4]));
+            bool ok = fs_path(0x13, path);
+            printf("sync: mkdir %s %s\n", path, ok ? "ok" : fs_err());
             (*acts)++;
         }
     }
     vn[n].flags |= VF_SEEN;
     if (isdir) {
         vn[n].start_cl = (uint16_t)c;
-        queue[(*nq)++] = (uint16_t)n;
+        /* a folder the Atari never read cannot have changed: skip it, and
+           reading it here would load it from the server */
+        if (vn[n].flags & VF_LOADED) queue[(*nq)++] = (uint16_t)n;
         return;
     }
     bool dirty;
@@ -1636,7 +2089,9 @@ static void vsync(void)
     memset(dbits[k0], 0, sizeof dbits[0]);
     d->wr_pending = false;                  /* writes from now on: next sync */
     fsec_rel = -1;
-    for (uint16_t i = d->root; i < d->node_end; i++) vn[i].flags &= (uint8_t)~VF_SEEN;
+    /* nodes from here on are folders read while we sync (vreq_service) */
+    uint16_t end0 = d->node_end;
+    for (uint16_t i = d->root; i < end0; i++) vn[i].flags &= (uint8_t)~VF_SEEN;
     vn[d->root].flags |= VF_SEEN;
     queue[nq++] = d->root;
     for (int qi = 0; qi < nq; qi++) {
@@ -1669,14 +2124,15 @@ static void vsync(void)
             c = vfat_get(c);
         }
     }
-    /* nodes GEMDOS no longer has: children before their directory */
-    for (int i = d->node_end - 1; i > d->root; i--) {
+    /* nodes GEMDOS no longer has: children before their directory. Hidden
+       ones (no clusters this session) GEMDOS never had. */
+    for (int i = end0 - 1; i > d->root; i--) {
         vnode_t *v = &vn[i];
-        if (v->flags & (VF_SEEN | VF_DEL)) continue;
+        if (v->flags & (VF_SEEN | VF_DEL | VF_HIDE)) continue;
         vpath((uint16_t)i, path, sizeof path);
         vfile_close();
-        bool ok = tnfs_path(v->isdir ? 0x14 : 0x26, path);
-        printf("sync: %s %s %s\n", v->isdir ? "rmdir" : "delete", path, ok ? "ok" : tnfs_err(rx[4]));
+        bool ok = fs_path(v->isdir ? 0x14 : 0x26, path);
+        printf("sync: %s %s %s\n", v->isdir ? "rmdir" : "delete", path, ok ? "ok" : fs_err());
         v->flags |= VF_DEL;
         acts++;
         vreq_service();
@@ -1687,7 +2143,7 @@ static void vsync(void)
         d->wr_pending = true;
         d->last_wr_ms = to_ms_since_boot(get_absolute_time());
     }
-    printf("sync: TNFS %d, %d change(s), %lu ms\n", (int)(d - vd) + 1, acts,
+    printf("sync: %s %d, %d change(s), %lu ms\n", d->sd ? "SD" : "TNFS", (int)(d - vd) + 1, acts,
            (unsigned long)(to_ms_since_boot(get_absolute_time()) - t0));
 }
 
@@ -1698,27 +2154,84 @@ static void drives_down(void)
         cur = &vd[i];
         cur->ready = false;
         vfile_close();
-        if (cur->tmp_open && cur->mounted) tnfs_close(cur->tmp_handle);
-        cur->tmp_open = false;
+        tmp_close(cur);
         tnfs_unmount();
     }
     cur = NULL;
+}
+
+/* drive i (cur) can be reached: read its root, show it, tell GEMDOS */
+static void vdrive_up(int i)
+{
+    vdrive_t *d = &vd[i];
+    d->dir[0] = 0;
+    vfat_scan();
+    for (uint16_t k = d->root + 1; k < d->node_end; k++) {
+        char p[256];
+        vpath(k, p, sizeof p);
+        printf("  %.8s.%.3s %s %8lu  cl %5u+%-4u %s\n", vn[k].n83, vn[k].n83 + 8,
+               vn[k].isdir ? "<DIR>" : "     ", (unsigned long)vn[k].size,
+               vn[k].first_cl, vn[k].ncl, p);
+    }
+    int len = 0;
+    for (uint16_t k = 0; k < vn[d->root].child_count && len < (int)sizeof d->dir - 40; k++) {
+        const vnode_t *v = &vn[vn[d->root].child_start + k];
+        len += snprintf(d->dir + len, sizeof d->dir - (size_t)len, "%s%s%s",
+                        len ? ", " : "  ", vpool + v->name_off, v->isdir ? "\\" : "");
+    }
+    if (vn[d->root].child_count && len < (int)sizeof d->dir - 3) strcpy(d->dir + len, "\r\n");
+    if (d->sd)
+        snprintf(d->status, sizeof d->status, "OK! SD card, %s: root %lu files, %lu dirs%s",
+                 sd_fs.fs_type == FS_EXFAT ? "exFAT" : sd_fs.fs_type == FS_FAT32 ? "FAT32" : "FAT",
+                 (unsigned long)d->files, (unsigned long)d->dirs, d->skipped ? " (some skipped)" : "");
+    else
+        snprintf(d->status, sizeof d->status, "OK! %s, TNFS %u.%u: root %lu files, %lu dirs%s",
+                 d->use_tcp ? "TCP" : "UDP", d->vmaj, d->vmin,
+                 (unsigned long)d->files, (unsigned long)d->dirs, d->skipped ? " (some skipped)" : "");
+    printf("net: %s %d %s\n", d->sd ? "SD" : "TNFS", i + 1, d->status);
+    disk_changed(1 + i);                    /* new tree: GEMDOS must re-read */
 }
 
 /* connect, mount and scan every drive: at start-up and by console N */
 static void tnfs_connect_and_scan(void)
 {
     drives_down();
-    vn_count = 0;
-    valloc_n = 0;
     vpool[0] = 0;
-    vpool_len = 1;
-    for (int i = 0; i < nvd; i++) vd[i].failed = false;
-    if (!wifi_connect()) {
+    /* each drive a fixed part of the node table and name pool: they grow
+       whenever the Atari reads a folder */
+    for (int i = 0; i < nvd; i++) {
+        vdrive_t *d = &vd[i];
+        d->root = d->node_end = d->va0 = (uint16_t)(i * VNODES / nvd);
+        d->node_limit = (uint16_t)((i + 1) * VNODES / nvd);
+        d->van = 0;
+        d->pool_start = d->pool_end = 1 + (uint32_t)i * (sizeof vpool - 1) / (uint32_t)nvd;
+        d->pool_limit = 1 + (uint32_t)(i + 1) * (sizeof vpool - 1) / (uint32_t)nvd;
+        d->failed = false;
+        vdrive_wait(d);
+    }
+    /* SD drives first: they need no Wi-Fi */
+    int ntnfs = 0;
+    sd_state = 0;                           /* (re)mount: the card may have changed */
+    sd_mount();                             /* also without SD drives: the write cache */
+    for (int i = 0; i < nvd; i++) {
+        if (!vd[i].sd) { ntnfs++; continue; }
+        vreq_service();
+        vdrive_t *d = cur = &vd[i];
+        FILINFO fi;
+        printf("net: SD %d: %s\n", i + 1, d->path);
+        if (!sd_mount()) vdrive_fail(i, "no SD card, or not FAT32/exFAT");
+        else if (strcmp(d->path, "/") && (f_stat(d->path, &fi) != FR_OK || !(fi.fattrib & AM_DIR)))
+            vdrive_fail(i, "folder not found on the SD card");
+        else vdrive_up(i);
+        if (d->failed) printf("net: SD %d not available\n", i + 1);
+    }
+    cur = NULL;
+
+    if (!g_net.ssid[0] || !wifi_connect()) {
         if (g_set.rtc_enabled && clk_state != CLK_VALID) clk_state = CLK_NONE;
         char why[120];
-        snprintf(why, sizeof why, "no Wi-Fi (%s)", wifi_status);
-        for (int i = 0; i < nvd; i++) vdrive_fail(i, why);
+        snprintf(why, sizeof why, "no Wi-Fi (%s)", g_net.ssid[0] ? wifi_status : "not set up");
+        for (int i = 0; i < nvd; i++) if (!vd[i].sd) vdrive_fail(i, why);
         return;
     }
     /* the time first: the driver may be waiting for it at boot */
@@ -1729,37 +2242,18 @@ static void tnfs_connect_and_scan(void)
         if (!ok) ntp_fails = 1;     /* CLK_NTP stays: quick retries from net_poll */
         ntp_next = make_timeout_time_ms(ok ? NTP_RESYNC_MS : NTP_FAST_MS);
     }
-    if (!nvd) { printf("net: no TNFS drive configured\n"); return; }
+    if (!ntnfs) { printf("net: no TNFS drive configured\n"); return; }
     for (int i = 0; i < nvd; i++) {
+        if (vd[i].sd) continue;
+        vreq_service();
         vdrive_t *d = cur = &vd[i];
-        d->dir[0] = 0;
         printf("net: TNFS %d: %s:%u %s\n", i + 1, d->server, d->port, d->path);
         if (!tnfs_mount()) {
             printf("net: TNFS %d %s\n", i + 1, d->status);
             vdrive_fail(i, d->status);
             continue;
         }
-        vfat_scan();
-        for (uint16_t k = d->root + 1; k < d->node_end; k++) {
-            char p[256];
-            vpath(k, p, sizeof p);
-            printf("  %.8s.%.3s %s %8lu  cl %5u+%-4u %s\n", vn[k].n83, vn[k].n83 + 8,
-                   vn[k].isdir ? "<DIR>" : "     ", (unsigned long)vn[k].size,
-                   vn[k].first_cl, vn[k].ncl, p);
-        }
-        int len = 0;
-        for (uint16_t k = 0; k < vn[d->root].child_count && len < (int)sizeof d->dir - 40; k++) {
-            const vnode_t *v = &vn[vn[d->root].child_start + k];
-            len += snprintf(d->dir + len, sizeof d->dir - (size_t)len, "%s%s%s",
-                            len ? ", " : "  ", vpool + v->name_off, v->isdir ? "\\" : "");
-        }
-        if (vn[d->root].child_count && len < (int)sizeof d->dir - 3) strcpy(d->dir + len, "\r\n");
-        snprintf(d->status, sizeof d->status,
-                 "OK! %s, TNFS %u.%u: %lu files, %lu dirs%s",
-                 d->use_tcp ? "TCP" : "UDP", d->vmaj, d->vmin,
-                 (unsigned long)d->files, (unsigned long)d->dirs, d->skipped ? " (some skipped)" : "");
-        printf("net: TNFS %d %s\n", i + 1, d->status);
-        disk_changed(1 + i);                /* new tree: GEMDOS must re-read */
+        vdrive_up(i);
     }
     cur = NULL;
 }
@@ -1772,6 +2266,7 @@ void net_init(void)
         snprintf(wifi_status, sizeof wifi_status, "idle (not connected yet)");
         test_req = true;                            /* auto-connect at start-up */
     }
+    for (int i = 0; i < nvd; i++) if (vd[i].sd) test_req = true;   /* SD drives: also without Wi-Fi */
 }
 
 void net_poll(void)
@@ -1790,6 +2285,18 @@ void net_poll(void)
     if (test_req) {
         test_req = false;
         tnfs_connect_and_scan();
+    }
+    if (atari_reset) {
+        /* a fresh GEMDOS: first to the server what the Atari wrote, then
+           every tree again from the root (the clusters start anew) */
+        for (int i = 0; i < nvd; i++) {
+            if (!vd[i].ready) continue;
+            cur = &vd[i];
+            if (cur->wr_pending) vsync();
+            vfat_scan();
+            cur = NULL;
+        }
+        atari_reset = false;
     }
     vreq_service();
     /* a second after the last write: bring the server in line */

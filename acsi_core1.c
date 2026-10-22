@@ -23,11 +23,11 @@
 
 #define FW_VERSION FW_VERSION_STR
 
-/* disk size: flash disk, then one virtual partition per TNFS drive */
+/* disk size: C:, then one virtual partition per TNFS drive */
 static uint32_t total_sectors(void)
 {
     uint32_t nv = net_vdrives();
-    return nv ? VFAT_START + (nv - 1) * VFAT_STRIDE + VFAT_SECTORS : DISK_SECTORS;
+    return nv ? VFAT_START + (nv - 1) * VFAT_STRIDE + VFAT_SECTORS : VFAT_START;
 }
 #define TOTAL_SECTORS total_sectors()
 
@@ -844,6 +844,7 @@ static void __not_in_flash_func(target_loop)(void)
                 in_reset = true;
                 g_cfg.mute_until_reset = false;     /* fresh GEMDOS: safe again */
                 net_bridge_reset();                 /* STinG is gone */
+                net_atari_reset();                  /* fresh GEMDOS: TNFS from the root */
                 stage_flush();                      /* core0 may change C: now */
                 stage_blk = -1;
                 bus_idle();

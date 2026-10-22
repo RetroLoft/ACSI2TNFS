@@ -8,7 +8,11 @@ sources). vasm: $VASM, else ~/.pico-sdk/vasm/vasm/vasmm68k_mot(.exe), else PATH.
 Layout (512-byte sectors, must match acsi.h / layout.inc):
   LBA 0            Atari root sector: boot code, hd_siz, 1 GEM partition
   LBA 1..8         driver (DRV.BIN)
-  LBA 16..end      GEM partition, FAT16, 2 sectors per cluster
+  LBA 16..         GEM partition, FAT16, 1 sector per cluster, CLUSTERS clusters
+
+C: is larger than the flash disk: AHDI and HDDRIVER read every GEM partition
+as FAT16, EmuTOS and DOS only one with at least 4085 clusters. The clusters
+past the end of the flash are marked bad, so nothing is ever stored there.
 """
 import os, shutil, struct, subprocess, sys, time
 
@@ -16,12 +20,15 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 OUT = os.path.join(HERE, "out")
 
-DISK_SECTORS = 2040            # acsi.h
+DISK_SECTORS = 2040            # acsi.h: sectors in flash
 DISK_FLASH_OFFSET = 0x100000   # acsi.h
+VFAT_START = 8192              # acsi.h: first TNFS partition, hd_siz without them
 DRVSECT = 8                    # layout.inc
 PSTART = 16
 ROOT_ENTRIES = 256
-SPC = 2
+SPC = 1
+CLUSTERS = 4096                # >= 4085: FAT16 for every driver
+FAT_BAD = 0xfff7
 FILES_DIR = os.path.join(HERE, "files")
 
 
@@ -64,7 +71,7 @@ def root_sector(boot, psize):
     s = bytearray(512)
     assert len(boot) <= 0x1c2, "boot code too large"
     s[:len(boot)] = boot
-    struct.pack_into(">I", s, 0x1c2, DISK_SECTORS)                      # hd_siz
+    struct.pack_into(">I", s, 0x1c2, VFAT_START)                        # hd_siz
     struct.pack_into(">B3sII", s, 0x1c6, 0x81, b"GEM", PSTART, psize)  # p0
     total = sum(be16(s, i) for i in range(0, 510, 2)) & 0xffff
     struct.pack_into(">H", s, 510, (0x1234 - total) & 0xffff)          # bootable
@@ -93,24 +100,17 @@ def dos_datetime(t):
     return tm, d
 
 
-def fat16_partition(psize, files):
+def fat16_partition(files):
+    """Returns (partition size in sectors, image of the part that is in flash)."""
     bps = 512
     rdlen = ROOT_ENTRIES * 32 // bps
     res = 1
-    # FAT size: iterate until stable
-    # FAT type follows the cluster count (< 4085 = FAT12), because EmuTOS and
-    # DOS decide it that way; a small FAT16 volume is misread by them.
-    spf = 1
-    while True:
-        ncl = (psize - res - 2 * spf - rdlen) // SPC
-        fat12 = ncl < 4085
-        fatbytes = ((ncl + 2) * 3 + 1) // 2 if fat12 else (ncl + 2) * 2
-        need = (fatbytes + bps - 1) // bps
-        if need <= spf:
-            break
-        spf = need
+    spf = ((CLUSTERS + 2) * 2 + bps - 1) // bps
     datrec = res + 2 * spf + rdlen
-    img = bytearray(psize * bps)
+    psize = datrec + CLUSTERS * SPC
+    ncl = CLUSTERS
+    usable = (DISK_SECTORS - PSTART - datrec) // SPC    # clusters inside the flash
+    img = bytearray((DISK_SECTORS - PSTART) * bps)
 
     bs = bytearray(512)
     bs[0:3] = b"\xeb\x3c\x90"
@@ -120,12 +120,14 @@ def fat16_partition(psize, files):
     bs[0x26] = 0x29
     struct.pack_into("<I", bs, 0x27, 0x2026ac51)
     bs[0x2b:0x36] = b"ACSI2TNFS  "
-    bs[0x36:0x3e] = b"FAT12   " if fat12 else b"FAT16   "
+    bs[0x36:0x3e] = b"FAT16   "
     bs[510:512] = b"\x55\xaa"
     img[0:512] = bs
 
     fat = [0] * (ncl + 2)
-    fat[0], fat[1] = (0xff8, 0xfff) if fat12 else (0xfff8, 0xffff)
+    fat[0], fat[1] = 0xfff8, 0xffff
+    for c in range(usable + 2, ncl + 2):
+        fat[c] = FAT_BAD
     rootdir = bytearray(rdlen * bps)
     tm, dt = dos_datetime(files_date())
     struct.pack_into("<11sB10xHHHI", rootdir, 0, b"ACSI2TNFS  ", 0x08, tm, dt, 0, 0)
@@ -138,29 +140,24 @@ def fat16_partition(psize, files):
         first = nextcl if data else 0
         for i in range(ncls):
             c = nextcl + i
-            fat[c] = c + 1 if i < ncls - 1 else (0xfff if fat12 else 0xffff)
+            fat[c] = c + 1 if i < ncls - 1 else 0xffff
             off = (datrec + (c - 2) * SPC) * bps
             chunk = data[i * SPC * bps:(i + 1) * SPC * bps]
             img[off:off + len(chunk)] = chunk
         nextcl += ncls
+        assert nextcl <= usable + 2, "files do not fit on C:"
         # system files: read-only (the firmware keeps them up to date, console R restores them)
         struct.pack_into("<11sB10xHHHI", rootdir, ent * 32, n83, 0x01, tm, dt, first, len(data))
         ent += 1
-    if fat12:
-        fat += [0] * (len(fat) & 1)
-        fatb = bytearray()
-        for i in range(0, len(fat), 2):
-            v = fat[i] | (fat[i + 1] << 12)
-            fatb += bytes((v & 0xff, (v >> 8) & 0xff, v >> 16))
-    else:
-        fatb = struct.pack("<%dH" % len(fat), *fat)
+    fatb = struct.pack("<%dH" % len(fat), *fat)
     for k in range(2):
         off = (res + k * spf) * bps
         img[off:off + len(fatb)] = fatb
     off = (res + 2 * spf) * bps
     img[off:off + len(rootdir)] = rootdir
-    print(f"  FAT{12 if fat12 else 16}: {psize} sectors, spf={spf}, rdlen={rdlen}, datrec={datrec}, clusters={ncl}, used={nextcl - 2}")
-    return img
+    print(f"  FAT16: {psize} sectors, spf={spf}, rdlen={rdlen}, datrec={datrec}, "
+          f"clusters={ncl} ({usable} in flash), used={nextcl - 2}")
+    return psize, img
 
 
 def uf2(chunks):
@@ -209,11 +206,12 @@ def main():
         if name.upper() not in ("README.TXT", "ACSITNFS.PRG"):
             files.append((name.upper(), open(os.path.join(FILES_DIR, name), "rb").read()))
 
-    psize = DISK_SECTORS - PSTART
+    psize, part = fat16_partition(files)
+    assert PSTART + psize <= VFAT_START, "C: overlaps the TNFS partitions"
     disk = bytearray(DISK_SECTORS * 512)
     disk[0:512] = root_sector(boot, psize)
     disk[512:512 + len(drv)] = drv
-    disk[PSTART * 512:] = fat16_partition(psize, files)
+    disk[PSTART * 512:] = part
 
     open(os.path.join(OUT, "disk.img"), "wb").write(disk)
     write_seed(disk)

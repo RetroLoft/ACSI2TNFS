@@ -48,12 +48,14 @@
      0x1FF000 .. 0x1FFFFF  settings
 --------------------------------------------------------------------------- */
 #define DISK_FLASH_OFFSET   0x100000u
-#define DISK_SECTORS        2040u
+#define DISK_SECTORS        2040u   /* in flash; the C: partition is larger,
+                                       the rest is marked bad (atari/mkdisk.py) */
 #define CFG_FLASH_OFFSET    0x1FF000u
 
 /* Virtual FAT16 partition backed by the TNFS server (Wi-Fi boards only).
-   16 MB: TOS 1.x Rwabs sector numbers are signed 16-bit (512-byte sectors). */
-#define VFAT_START          4096u
+   16 MB: TOS 1.x Rwabs sector numbers are signed 16-bit (512-byte sectors).
+   Also the disk size without TNFS drives: C: ends before it. */
+#define VFAT_START          8192u
 #define VFAT_SECTORS        32760u
 /* One partition per TNFS drive, every VFAT_STRIDE sectors from VFAT_START.
    The root sector has 4 entries: C: plus up to 3 TNFS drives. */
@@ -168,6 +170,7 @@ void acsi_stage_invalidate(void);
 void acsi_set_next_id(int id);                         /* from the next reset on */
 int acsi_next_id(void);                                /* id stored in flash */
 bool net_vread(uint32_t drive, uint32_t rel, uint32_t n, uint8_t *buf); /* core1: virtual part. */
+void net_atari_reset(void);                            /* core1: TNFS trees from the root again */
 bool net_vwrite(uint32_t drive, uint32_t rel, uint32_t n, uint8_t *buf);
 void vfat_bootsector(uint8_t *b);
 
@@ -190,5 +193,6 @@ uint32_t net_tx_commit(uint8_t *slot, uint32_t sectors);
 void net_bridge_console(void);                /* core0: 'w' command           */
 void net_bridge_trace(void);                  /* core0: 'W' frame timeline    */
 void core1_main(void);
+void sd_console_test(void);                   /* core0: console 'c' (sdcard.c) */
 void cfg_save(void);
 const char *scsi_opname(uint8_t op);

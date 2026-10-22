@@ -213,3 +213,111 @@ Twee dingen moeten op de echte hardware bevestigd worden voordat hierop gebouwd 
 
 1. **Scant AHDI op de Mega STE ook andere ID's dan 0?** Verwacht: ja, maar niet getest. Test met de sniffer-modus: aanzetten en kijken naar welke ID's AHDI commando's stuurt.
 2. **Scant HDDRIVER het ID van de Pico?** HDDRIVER scant alleen de ID's die in de HDDRUTIL-instellingen aanstaan. Het ID van de Pico moet daar dus bij staan.
+
+## Mega STE met HDDRIVER 12: testverslag (12 oktober 2026)
+
+Mega STE, TOS 2.06, BlueSCSI intern (C: t/m J:), HDDRIVER 12.0. De adapter op ACSI-ID 1; onze driver laadt niet, HDDRIVER koppelt alles aan: onze C: wordt K:, de TNFS-drives L:, M:, N:.
+
+- **Bestanden groter dan één cluster gaven "An error occurred while reading the source file".** HDDRIVER (en AHDI) lezen elke GEM-partitie als FAT16; onze C: was FAT12 (1000 clusters), wat onze driver, EmuTOS en DOS uit het aantal clusters afleiden. C: is nu FAT16 met 4096 clusters van 1 sector, waarvan de clusters voorbij de flash als bad gemarkeerd zijn; de TNFS-partities schuiven van LBA 4096 naar 8192. Getest: kopiëren van K: naar de BlueSCSI werkt. Nog te testen: C: op een ST met TOS 1.04 en onze driver (AHDI gebruikt altijd 2 sectoren per cluster).
+- **"Data on the disk in drive M: may be damaged" na een lange zandloper.** HDDRIVER wacht bij het opstarten niet op het netwerk, zoals onze driver; core0 beantwoordde tijdens Wi-Fi, NTP en het inlezen van de TNFS-mappen (40 s voor de LAN-drive) geen enkel verzoek. Nu: drives die nog niet klaar zijn tonen meteen NET_WAIT.TXT, en tijdens het inlezen worden verzoeken tussendoor beantwoord. Getest: geen zandloper en geen melding meer.
+- **Inlezen met READDIRX** in plaats van READDIR + STAT per bestand: de LAN-drive (674 bestanden, 196 mappen) in 3,3 s in plaats van ~40 s.
+- **Een lege TNFS-drive was een serverfout:** beide tnfsd's op de server gaven op OPENDIR status 0x10 (EMFILE): 1024 open handles, de limiet. Vermoedelijk blijft een open map achter als een client (de Pico) halverwege het inlezen uitgaat, ook als tnfsd de sessie later opruimt. Herstart van de tnfsd lost het op.
+- Elke leesopdracht op de Mega STE geeft één /ACK-puls te veel (513 voor 512 bytes): HDDRIVER zet de DMA-teller ruimer en de BC547 laat /DRQ laat los. Onschuldig, maar met de 74LS07 van `v2` verwacht ik het niet meer.
+- Geprobeerd en teruggedraaid: de Pico als removable melden met UNIT ATTENTION op TEST UNIT READY, zodat HDDRIVER een veranderde drive opnieuw inleest. Niet afgerond: de test viel samen met het tnfsd-lek. Zie lazy loading hieronder.
+
+## Ontwerp: TNFS-mappen pas inlezen als de Atari ze opent (lazy loading)
+
+Nu leest de Pico na het mounten de hele boom in en geeft elk bestand en elke map een vaste rij clusters. Bij een grote server raken de knooppunten (1024 voor alle drives samen) of de 16 MB per drive op ("some skipped"), terwijl je in één sessie maar een klein deel gebruikt. Daarom: alleen de root bij het mounten, een submap pas als de Atari een van zijn sectoren leest.
+
+**Hoe het werkt**
+
+- Mounten: OPENDIRX/READDIRX van de root. Elk bestand krijgt zijn rij clusters (de grootte komt uit READDIRX), elke submap een vaste rij van `V_DIRCL` clusters (voorstel 8 = 8 KB = 254 entries) en de vlag "nog niet ingelezen".
+- De Atari leest een sector van een map die nog niet ingelezen is: eerst die map inlezen (READDIRX), zijn kinderen als aaneengesloten blok achteraan in de knooppunten van de drive, met clusters zoals hierboven; dan de sector teruggeven. Met READDIRX kost een map van 200 entries een handvol antwoorden, ook over internet ruim binnen de 9 s van core1.
+- **De harde regel (FAT-cache van GEMDOS):** de Pico houdt per drive bij welke FAT-sectoren de Atari sinds de reset gelezen heeft (64 bits per drive). Nieuwe clusters worden alleen uitgedeeld in FAT-sectoren die de Atari nog niet gezien heeft: wat GEMDOS niet gelezen heeft, kan het niet in zijn cache hebben. Uitdelen gaat altijd oplopend; past een rij niet meer in de huidige FAT-sector of is die al gezien, dan door naar de volgende ongeziene (één FAT-sector = 256 clusters = 256 KB). Clusters die zo overblijven blijven vrij (0) en zijn dan gewoon ruimte voor de Atari om te schrijven. Ook dat botst niet: GEMDOS leest een FAT-sector altijd voordat het er clusters uit neemt, dus die sector is dan al gezien.
+- **Reset van de Atari = opnieuw beginnen:** core1 meldt /RESET aan core0; core0 schrijft eerst wat de Atari nog niet gesynchroniseerd heeft naar de server (vsync), maakt dan per drive de knooppunten, de clusters en de gezien-bits leeg en leest de root opnieuw in. In die tijd toont de drive NET_WAIT.TXT.
+- Schrijven (vsync) loopt alleen door mappen die ingelezen zijn: een map die de Atari nooit gelezen heeft, kan het ook niet veranderd hebben.
+- Vaste verdeling van de knooppunten en de namenpool over de drives (elk 1/n), omdat drives nu door elkaar groeien.
+
+**Grenzen**
+
+- 16 MB per drive per sessie (512-byte sectoren, de TOS 1.x-grens). Een map met grote bestanden kost bij het tonen al hun ruimte: een map met 30 diskette-images van 720 KB past niet helemaal ("skipped").
+- Een map met meer dan 254 entries toont de eerste 254.
+- Leest de Atari de hele FAT (Dfree: "Show info", vrije ruimte bij kopiëren), dan zijn alle FAT-sectoren gezien en kan er tot de volgende reset geen map meer bij. **Plafond (vol of alles gezien): media change** (Frank): gezien-bits leeg en de drive melden als gewisseld, zodat GEMDOS alles opnieuw leest. Onze driver kent media change (vendor sub 10); voor HDDRIVER moet daarvoor UNIT ATTENTION alsnog werken. Dat is fase 2.
+
+**Fases**
+
+1. Lazy inlezen met de FAT-regel, reset = opnieuw beginnen, vsync alleen door ingelezen mappen. Bij een plafond: "skipped" en een melding in de console. Test: L:/M:/N: met onze driver op de ST en met HDDRIVER op de Mega STE, mappen openen, een spel starten, schrijven en weer lezen, reset.
+2. Plafond: media change, met onze driver en (via UNIT ATTENTION) met HDDRIVER.
+
+**Fase 1: testverslag (12 oktober 2026, Mega STE met HDDRIVER)**
+
+- Mounten: de drie roots binnen 0,1 s na Wi-Fi. Mappen worden ingelezen als de desktop ze toont (console: "read /GAMES/1: 40 entries, clusters up to 455, nodes 59/342"); in een sessie met een tiental spellen en programma's hoogstens 105 van 342 knooppunten en 3984 van 16299 clusters.
+- 7 resets: elke keer opnieuw vanaf de root, met dezelfde clusters. Schrijven (HDDRUTIL.INF vanuit HDDRUTIL op N:) gesynchroniseerd naar de server.
+- Eerste ronde: veel spellen laadden niet of liepen vast. Oorzaak: de energiespaarstand van de Wi-Fi (PM2): ping naar de Pico gemiddeld 59 ms (pieken 110 ms) bij weinig verkeer, en een leesopdracht van 64 KB is 128 READs van 512 bytes, dus 2-3 s: HDDRIVER gaf een time-out. De energiespaarstand staat nu altijd uit: ping 7 ms (1 per seconde) en 1,8 ms (snel achter elkaar), 64 KB in 0,7-1 s.
+- Tweede ronde: geen rare dingen meer. Eén leesopdracht van 237 mislukte: een TNFS-READ kreeg vier keer 1 s geen antwoord en de herhaling ook, daarna werkte alles weer. Vanaf de PC leest hetzelfde bestand foutloos (0,8 ms per READ); vermoedelijk hapert de Wi-Fi van de Pico (ook de eerste verbindingspoging mislukt bij elke start). Volgende stap: RSSI in de console en een melding bij elke retry.
+- Nog te testen: onze driver op een ST met TOS 1.04 (vooral schrijven en reset).
+
+## StinG zonder XControl en STINGINS.TOS: testverslag (12 oktober 2026, Mega STE)
+
+- StinG met de bestanden uit de back-up werkte op de Mega STE (HDDRIVER, adapter op ID 1), met XControl. Zonder XControl gaf URLVIEW "Destination host is unreachable", ook naar het eigen netwerk; er kwam geen enkel frame bij de Pico. De poortinstellingen (IP, actief) uit STING.PRT past alleen STNGPORT.CPX toe, bij het opstarten van XControl.
+- **ACSI_NET.STX 00.08** leest `ACSI_IP` en `ACSI_MASK` uit DEFAULT.CFG en zet de poort zelf aan (`on_port`). Het wacht bij het opstarten tot ~30 s op de Wi-Fi van de adapter: onder HDDRIVER laadt StinG voordat de Pico na het aanzetten verbonden is.
+- Daarna bleef `ACSI_IP` toch onbekend (PORTINFO.PRG: `ACSI_IP = 0`). Oorzaak: een fout in STinG 1.26: `init_cfg` zet na elke variabele een 0 over het regeleinde en zoekt daarna naar dat regeleinde. Bij alleen LF slaat het zo de regel na elke variabele over; `ACSI_IP` stond direct onder `ACTIVATE`. De DEFAULT.CFG uit de back-up had LF. STINGINS.TOS schrijft DEFAULT.CFG daarom altijd met CR LF.
+- STINGINS.TOS (StinG 1.26, TCP 1.41, UDP, RESOLVE, ACSI_NET 00.08, PING): installatie zonder XControl getest, URLVIEW en ping werken. Opnieuw starten biedt "alleen netwerkinstellingen" aan. Gevonden en opgelost: de voorgestelde gateway was 255.255.178.1 (tekenuitbreiding van `p[2] << 8` met `-mshort`).
+- "Alleen netwerkinstellingen" (keuze 1) naar een ander IP-adres getest: werkt zonder problemen.
+- Nog te doen: een installatie op een ST met TOS 1.04 en onze driver; een nieuw systeembestand komt op een bestaande C: pas met `R` (sysfiles zet ontbrekende bestanden niet vanzelf terug, omdat de gebruiker ze ook bewust gewist kan hebben).
+
+## NETCLOCK.PRG: testverslag (12 oktober 2026, Mega STE)
+
+- Onder HDDRIVER laadt onze driver niet en zet niemand de klok. NETCLOCK.PRG (in AUTO) vraagt de netwerktijd aan de adapter (vendor sub 9, als de driver), wacht per stap tot 30 s op Wi-Fi en de tijdserver met een aftelling (ESC slaat over) en zet `Tsetdate`, `Tsettime` en `Settime`. Getest: de klok staat goed, met de UTC-afwijking die de Pico toepast.
+- ACSI_NET.STX telt nu ook af bij het wachten op Wi-Fi, in plaats van puntjes.
+- De UTC-afwijking is vast (`+1`): zomer- en wintertijd past de firmware niet zelf toe. Op 12 oktober is het in Amsterdam UTC+2.
+
+## Ontwerp: de SD-kaart (drive en schrijfcache)
+
+Twee functies, allebei met de kaart als **optie**: zonder kaart werkt alles zoals nu.
+
+1. **SD-drive:** in ACSITNFS.PRG → *Drives* een drive van het type SD met een map, bv. `/hd`. De drive toont de inhoud van die map op de kaart (op de pc geformatteerd: FAT32, of exFAT bij kaarten vanaf 64 GB).
+2. **Schrijfcache voor TNFS:** wat de Atari naar een TNFS-drive schrijft, gaat nu sector voor sector als TNFS-WRITE naar het verborgen bestand `/.A2T.TMP` op de server, en de Atari wacht op elk antwoord. Met een kaart gaan die sectoren naar een bestand op de kaart (map `/.A2TCACHE`, één bestand per drive); `vsync` leest ze daar terug en zet de bestanden op de server, op de achtergrond. Geen kaart of geen ruimte: terug naar het bestand op de server, zoals nu.
+
+**Wat er al is:** `sdcard.c` (init in SPI-modus, een blok lezen, CID/CSD; getest met een 32 GB FAT32-kaart op 12 MHz); de instellingen kennen `DRV_TYPE_SD` met `sd_path`, het configuratieprotocol draagt ze over. `config.c` weigert een SD-drive nog. Of het scherm *Drives* van ACSITNFS.PRG het type SD al aanbiedt: nagaan in SideTNFS-Config (staat niet op deze PC).
+
+**Opbouw**
+
+- **Bloklaag:** `sd_read`/`sd_write`, ook voor meerdere blokken achter elkaar (CMD18/CMD25: veel sneller dan blok voor blok).
+- **FatFs** (ChaN, BSD-achtige licentie) in `third_party/fatfs`: lange namen aan (de Atari ziet ze als 8.3 via `make83`, zoals bij TNFS), exFAT aan.
+- **Een bron onder de virtuele FAT:** alles wat nu TNFS-verzoeken doet (map lezen, bestand lezen, schrijven, mkdir/rmdir/unlink/rename, het tijdelijke sectorbestand) gaat via een klein stel functies per drive, met twee uitvoeringen: TNFS en SD (FatFs). Lazy loading, de FAT-regel, reset = opnieuw vanaf de root en `vsync` blijven zoals ze zijn.
+- **SD-drive zonder Wi-Fi:** een SD-drive wordt bij het opstarten meteen ingelezen, ook als er geen Wi-Fi is. Geen kaart: de drive toont `SD_ERR.TXT` met de reden (zoals `NET_ERR.TXT`).
+- **Drives:** C: plus maximaal 3 virtuele drives, TNFS en SD door elkaar (4 regels in de rootsector).
+
+**Grenzen**
+
+- 16 MB per drive per sessie, als bij TNFS (lazy loading).
+- Kaart wisselen terwijl de Atari draait: niet in de eerste fases (herstart nodig).
+- De schrijfcache geldt per sessie: valt de stroom weg voordat `vsync` klaar is, dan is het niet gesynchroniseerde deel weg (nu ook: het bestand op de server wordt niet opnieuw afgespeeld).
+
+**Fases**
+
+1. Bloklaag, FatFs en de SD-drive **alleen lezen**; `config.c` accepteert SD. Test: drive `/hd` tonen, programma's starten, met en zonder kaart, ook zonder Wi-Fi.
+2. **Schrijven** naar de SD-drive (het tijdelijke sectorbestand op de kaart, `vsync` naar de map op de kaart).
+3. **Schrijfcache voor TNFS** op de kaart, met terugval naar de server.
+
+**Fase 1: testverslag (14 oktober 2026, ST met onze driver, dev-print)**
+
+- 32 GB SDHC-kaart, FAT32 van de pc, map `/hd` als SD-drive (E:) naast twee TNFS-drives. Bij het opstarten eerst de kaart (FatFs), dan Wi-Fi en TNFS. Console `n`: "SD 3: /hd, OK! SD card, FAT32: root 4 files, 12 dirs".
+- Lezen: mappen lazy ingelezen (`GAMES/1` met 40 entries, `KOPIEER/PROCOPY`), programma's starten, zonder fouten.
+- Schrijven naar de SD-drive: geweigerd (WRITE(6) met sense 0x03), zoals bedoeld in fase 1.
+- Kaart eruit, `N`, reset: E: toont `SD_ERR.TXT` ("no SD card, or not FAT32/exFAT"); de TNFS-drives werken door. Kaart terug, `N`: de drive is er weer.
+- Nog niet getest: zonder Wi-Fi opstarten, exFAT-kaart, onder HDDRIVER.
+
+**Fase 2: testverslag (14 oktober 2026, ST met onze driver)**
+
+- Schrijven naar de SD-drive (E:, `/hd`): bestand naar de root en naar een submap, nieuwe map, bestand daarin, hernoemen, wissen. `vsync` zet het binnen 12-78 ms op de kaart (`write /TEST2/RUNME.TOS, 5090 bytes ok`, `mkdir`, `rename`, `delete`); 4 resets daarna, alles bleef staan. "Perfect en snel" (Frank).
+- Hoe: een laag `fs_*` (open, seek, read, write, close, mkdir/unlink/rmdir, rename) onder het tijdelijke sectorbestand, `vbuild` en `vsync`, per drive naar TNFS of FatFs. Het tijdelijke bestand van een SD-drive is `.A2T.TMP` in de map van de drive. Bestanden krijgen de netwerktijd (`get_fattime`).
+- TNFS-schrijven via dezelfde laag opnieuw getest (LAN-drive `192.168.178.10 /Atari.ST`, map `TNFSTEST`): mkdir, write (125 KB en 16 KB), rename, delete, en een bestand van de SD-drive naar de LAN-drive; 7 resets. Op de server byte voor byte gelijk aan de originelen. Een `vsync` van 125 KB naar de server kost 2,9-4,2 s (een TNFS-WRITE per 512 bytes), naar de kaart tientallen ms.
+- Nog te doen: de kaart op de pc controleren.
+
+**Fase 3: testverslag (14 oktober 2026, ST met onze driver)**
+
+- Met kaart: het tijdelijke sectorbestand van een TNFS-drive staat op de kaart (`/.A2TCACHE/T<n>.TMP`); console `n`: "TNFS writes: cached on the SD card". Map `TEST4` en drie bestanden (125 KB, 16 KB, 2 KB, een van de SD-drive) naar de LAN-drive: op de server byte voor byte gelijk. De Atari schrijft ~280 KB/s, eerst ~45 KB/s (een TNFS-WRITE per sector naar `/.A2T.TMP`). `vsync` van 125 KB: 1,4 s in plaats van 2,9-4,2 s, omdat de sectoren van de kaart worden teruggelezen.
+- Zonder kaart (eruit, `N`): "via the server (no SD card)"; schrijven gaat via `/.A2T.TMP` op de server, het bestand kwam goed aan. Kaart terug en `N`: weer de cache op de kaart.
+- Na een nieuwe TNFS-sessie (status 0xFF) blijft het tijdelijke bestand op de kaart open; alleen dat op de server moet opnieuw.

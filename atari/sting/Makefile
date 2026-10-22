@@ -7,6 +7,11 @@ OBJS = init.o acsi_net.o acsinet.o
 
 ACSI_NET.STX: $(OBJS)
 	$(CC) -mshort -nostdlib -o $@ $(OBJS) -lgcc -s
+	m68k-atari-mint-flags -q --mno-altram --mno-altalloc $@   # ACSI DMA: ST-RAM only (TT)
+
+# test tool: STinG's view of its ports and routes
+PORTINFO.PRG: init.o portinfo.o
+	$(CC) -mshort -nostdlib -o $@ $^ -lgcc -s
 
 %.o: %.c include/port.h include/transprt.h acsinet.h
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -15,4 +20,4 @@ ACSI_NET.STX: $(OBJS)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f ACSI_NET.STX $(OBJS)
+	rm -f ACSI_NET.STX PORTINFO.PRG $(OBJS) portinfo.o

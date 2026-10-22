@@ -9,6 +9,10 @@ What is on this disk?
   ACSITNFS.PRG configuration program (GEM): Wi-Fi, TNFS drives,
                clock and ACSI device ID
   ACSI_NET.STX STinG driver: internet on the Atari (see below)
+  STINGINS.TOS installs STinG for the adapter (see below)
+  NETCLOCK.PRG sets the clock from the network time, for the
+               AUTO folder when this disk's driver does not
+               load (HDDRIVER, a TT booting from its own disk)
 
 How does it work?
   - The Pico answers ACSI commands on its own device ID
@@ -24,6 +28,12 @@ Showing drive C: on the desktop
   Select the icon of floppy A:, choose Options / Install Disk
   Drive, change the letter to C and click Install.
   Then use Options / Save Desktop if you like.
+
+MEGA STE AND TT: SET THE ACSI ID TO THE FIRST FREE ONE!
+  A new adapter uses ID 6: a Mega STE or a TT does not see it.
+  - TT: ID 0 (with AHDI only ID 0 was asked; its disk is SCSI).
+  - Mega STE: ID 1 (the internal disk adapter is on ID 0);
+    with HDDRIVER also switch ID 1 on in HDDRUTIL.
 
 Changing the ACSI ID
   Give every device on the ACSI bus its own ID. If two devices
@@ -61,12 +71,12 @@ Drive letters and TOS versions
 
 Internet with STinG
   ACSI_NET.STX gives the Atari its own IP address on your Wi-Fi
-  network, through the Pico. You need STinG 1.26 and a control
-  panel (XControl) to set it up:
-  1. Copy ACSI_NET.STX into your STING folder.
-  2. STNGPORT.CPX: port ACSI2TNFS, a free IP address of your
-     network (not one your router hands out), the subnet mask,
-     tick Active, Save.
-  3. ROUTE.TAB: your network and a default route via your
-     router through the port ACSI2TNFS.
+  network, through the Pico. STINGINS.TOS installs everything:
+  STinG 1.26 (freeware, P. Rottengatter and R. Andersson) with
+  TCP.STX 1.41 (C. Zietz) and this driver.
+  1. Start STINGINS.TOS. It asks for the drive, a free IP
+     address for the Atari (not one your router hands out)
+     and suggests mask, router and name server.
+  2. Restart. XControl is not needed.
+  Start it again to change only the IP settings.
   Step by step: docs/NETWORK.md, github.com/RetroLoft/ACSI2TNFS

@@ -157,7 +157,7 @@
 				)
 			)
 		)
-		(property "Value" "SN74LVC245APW"
+		(property "Value" "74LVC245ADW"
 			(at 0 8.66 90)
 			(layer "F.Fab")
 			(hide yes)
@@ -1925,7 +1925,7 @@
 				)
 			)
 		)
-		(property "Value" "SN74LVC245APW"
+		(property "Value" "74LVC245ADW"
 			(at 0 8.66 90)
 			(layer "F.Fab")
 			(uuid "65066eff-2772-40d7-9f1e-e9815fff0282")
@@ -8820,7 +8820,7 @@
 			)
 		)
 	)
-	(gr_text "Atari ST ASCI netdrive and harddisk emulator"
+	(gr_text "Atari ST ACSI netdrive and harddisk emulator"
 		(at 116.825 94.7 0)
 		(layer "F.SilkS")
 		(uuid "b49ee2e9-da7c-4f5b-9d0e-6455f5504bea")

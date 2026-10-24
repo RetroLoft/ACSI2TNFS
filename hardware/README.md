@@ -119,7 +119,7 @@ the SMD parts:
    colours start at 5.
 4. Upload `bom.csv` and `positions.csv`. Parts without an LCSC number in the schematic
    are picked in the BOM step. **U1 and U2** must be the wide SOIC-20 version,
-   **74LVC245ADW** (the schematic value says APW, which is the small TSSOP package).
+   **74LVC245ADW**, not the small TSSOP (APW).
 5. **Check the placement preview:** the rotation of some parts is often wrong. For
    every IC, led and the SD socket the dot at pin 1 of the part must sit on the pin-1
    mark of the footprint; rotate the part in the preview where it does not.

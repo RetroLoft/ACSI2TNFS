@@ -10941,7 +10941,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "SN74LVC245APW"
+		(property "Value" "74LVC245ADW"
 			(at 295.5133 71.12 0)
 			(effects
 				(font
@@ -13138,7 +13138,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "SN74LVC245APW"
+		(property "Value" "74LVC245ADW"
 			(at 359.0133 71.12 0)
 			(effects
 				(font

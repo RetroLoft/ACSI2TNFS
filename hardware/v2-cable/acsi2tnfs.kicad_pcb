@@ -3496,7 +3496,7 @@
 			)
 		)
 	)
-	(footprint "Micro SD card:TF-SMD_TF-01A"
+	(footprint "Library:TF-SMD_TF-01A"
 		(layer "F.Cu")
 		(uuid "81a823a5-21ff-460f-b8cf-f262233051da")
 		(at 109.64 107.905)

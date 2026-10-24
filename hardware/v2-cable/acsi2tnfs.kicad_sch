@@ -13725,7 +13725,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Micro SD card:TF-SMD_TF-01A"
+		(property "Footprint" "Library:TF-SMD_TF-01A"
 			(at 295.91 208.28 0)
 			(effects
 				(font

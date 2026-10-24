@@ -84,7 +84,7 @@ def files_date():
     every build or branch switch. Without git: a fixed date."""
     here = os.path.dirname(os.path.abspath(__file__))
     try:
-        out = subprocess.run(["git", "log", "-1", "--format=%ct", "--", "files", "../version.txt"],
+        out = subprocess.run(["git", "log", "-1", "--no-merges", "--format=%ct", "--", "files", "../version.txt"],
                              cwd=here, capture_output=True, text=True, timeout=10).stdout.strip()
         if out:
             return int(out)

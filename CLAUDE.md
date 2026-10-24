@@ -5,7 +5,7 @@ up to 3 virtual drives (D:-P:: TNFS network drives and folders on a micro SD car
 also caches TNFS writes), a network clock (NTP, NETCLOCK.PRG) and a network function for
 STinG (ACSI_NET.STX, installed with STINGINS.TOS). Configured from the Atari with
 ACSITNFS.PRG. Firmware 0.4.0 (`version.txt`). User docs: `README.md`, `docs/*.md`;
-developer docs: `docs/DEVELOPMENT.md`; hardware: `hardware/README.md` (branch `v2`);
+developer docs: `docs/DEVELOPMENT.md`; hardware: `hardware/README.md`;
 design and test reports (Dutch): `project-notities.md`, `ACSI_NET-ontwerp.md`.
 
 ## How Frank wants to work
@@ -102,21 +102,22 @@ first. The old `build/` folder (if present) is an RP2040 build: don't use it.
 - KiCad schematic files are CRLF; scripts that edit them must keep that.
 - Shell heredocs mangle backslashes on this setup: write scripts with the Write tool.
 
-## State (2026-10-14)
+## State (2026-10-24)
 
-- `main`: SD card drives (read and write) and the SD write cache for TNFS; NETCLOCK.PRG.
+- One branch: `main` (`v2` and `acsi-net` were merged and deleted on 2026-10-24).
+- Firmware: SD card drives (read and write) and the SD write cache for TNFS; NETCLOCK.PRG.
   C: as FAT16; TNFS lazy loading with READDIRX,
   NET_WAIT.TXT while connecting; Wi-Fi power saving off; ACSI_NET.STX 00.08 and
   STINGINS.TOS (STinG without XControl); ST-RAM builds for the TT. Tested on the Mega STE
   (TOS 2.06, HDDRIVER, adapter on ACSI id 1) and the TT (TOS 3.06, AHDI, ACSI id 0), and with
   TOS 1.02, 1.04 and EmuTOS. Firmware still uses the pin map of the old **dev board**
   (data GP8-GP15, /OE GP6, DIR GP7, /IRQ and /DRQ through BC547s, high = active).
-- `v2` (pushed, not merged into main): KiCad projects `hardware/v2` (DB19 on the board)
-  and `hardware/v2-cable` (flat cable to a Lotharek adapter, pass-through), one circuit
-  with a 74LS07 and a **different pin map** (see `hardware/README.md`). Stays off main
-  until the firmware supports that pin map. No gerbers yet (Frank uses the KiCad plugin
-  Fabrication Toolkit for JLCPCB).
-- `acsi-net`: merged into main, kept for history.
+- Hardware: KiCad projects `hardware/v2` (DB19 on the board) and `hardware/v2-cable`
+  (flat cable to a Lotharek adapter, pass-through), one circuit with a 74LS07 and a
+  **different pin map** (see `hardware/README.md`); both with a TF-01A micro SD socket.
+  The dev board and v1 projects are gone (in git history). No gerbers yet (Frank uses
+  the KiCad plugin Fabrication Toolkit for JLCPCB). `hardware/v2-cable/case/`:
+  3D-printable case (OpenSCAD `case.scad`, STLs; one bottom, two lids).
 - The time zone is a fixed UTC offset (ACSITNFS.PRG), no automatic summer time: Frank's
   choice.
 - The dev board has R8 on /OE as a pull-down (`o` shows it): U1 is on while the Pico is

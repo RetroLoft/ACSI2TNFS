@@ -31,9 +31,12 @@ come from C:.
 
 - Another hard disk on a **lower** ACSI id boots first and keeps C: and the boot drive;
   the adapter's drives get the next free letters.
-- **AHDI** scans every id and would also mount the adapter's partitions; use the adapter
-  next to HDDRIVER with the adapter's id switched off in HDDRUTIL, or hide the adapter
-  (below).
+- **AHDI** and **HDDRIVER** mount the adapter's partitions themselves, with letters in
+  order after your own partitions; the letters chosen in `ACSITNFS.PRG` only apply with
+  the adapter's own driver. HDDRIVER only asks the ids switched on in HDDRUTIL, and does
+  not wait for the network at start-up: TNFS drives show `NET_WAIT.TXT` until the
+  adapter is connected. To keep the adapter out of the way, switch its id off in HDDRUTIL
+  or hide it (below).
 - **EmuTOS** mounts the partitions with its own ACSI driver as C:, D:, E:, …; the chosen
   letters and the network clock do not apply there.
 - **TOS 1.0** does not see the adapter; TOS 1.02 and later do.
@@ -75,8 +78,8 @@ Atari, and the game on the floppy starts by itself.
 
 ## System files on C:
 
-`README.TXT`, `ACSITNFS.PRG` and `ACSI_NET.STX` come with the firmware and are
-read-only. A new firmware updates them at start-up and keeps every other file on C:.
+`README.TXT`, `ACSITNFS.PRG`, `ACSI_NET.STX`, `STINGINS.TOS` and `NETCLOCK.PRG` come
+with the firmware and are read-only. A new firmware updates them at start-up and keeps every other file on C:.
 A system file that was deleted, or one that is new in the firmware, comes on C: with `R`.
 
 ## Troubleshooting
@@ -91,3 +94,6 @@ A system file that was deleted, or one that is new in the firmware, comes on C: 
 | Clock not set | Network clock on (`K`, ACSITNFS.PRG), Wi-Fi connected; ESC skips the wait at start-up |
 | Network drive shows only `NET_ERR.TXT` | The reason is in the file (Show). Fix it, then console `N` or restart |
 | Network drive empty | Still connecting at start-up, or console `n`: server reachable? folder correct? |
+| Drive shows only `NET_WAIT.TXT` | The adapter is still connecting: open the drive again in a moment |
+| SD drive shows only `SD_ERR.TXT` | No card, not FAT32/exFAT, or the folder is missing; fix it, console `N` and reset the Atari |
+| Folder shows only part of its files | The 16 MB of this session are used up, or TOS has read the whole FAT: reset the Atari (see [Limitations](../README.md#limitations)) |

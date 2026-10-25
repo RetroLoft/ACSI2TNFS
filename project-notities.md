@@ -374,3 +374,15 @@ Aanleiding: Show Info opent elke map van een drive. De LAN-drive is 1573 bestand
 - Schrijven LAN-drive: `write /ACSITNFS.PRG, 158161 bytes`, `rename`, `delete`, `mkdir /NEWMAP`, alle ok. SD-drive: map CRYSTALC met 4 bestanden, ok.
 - EmuTOS: na Show Info lege mappen tot een reset, zoals bedoeld.
 - Fase B (meer dan 16 MB per drive, grotere logische sectoren) is nodig om Show Info op de LAN-drive helemaal te laten passen.
+
+**Fase B: niet gedaan (25 oktober 2026)**
+
+Grotere logische sectoren (4 KB: 128 MB per drive, 8 KB: 256 MB, type BGM) zouden Show Info op de LAN-drive laten passen, maar: onze driver moet dan de GEMDOS-buffers vergroten (16-32 KB ST-RAM), alles moet opnieuw getest worden, en de FAT wordt grover. TOS 1.x kent per partitie ~32000 sectoren en clusters, dus de FAT krijgt 16 (4 KB) of 8 (8 KB) sectoren van 8 of 32 MB in plaats van 64 van 256 KB. Lazy loading mag alleen in FAT-sectoren die TOS nog niet las; na een handvol geopende bestanden zijn ze allemaal gezien en kan er geen map meer bij: vaker het plafond in gewoon gebruik. Een FAT die nooit veroudert (overal doorlopende ketens) strandt op wissen: GEMDOS volgt de keten tot het einde. Besluit (Frank): niet doen; Show Info op een grote netwerkdrive vermijden (README).
+
+## NTP zonder de drives op te houden (25 oktober 2026)
+
+Probleem (Mega STE, HDDRIVER): antwoordde de tijdserver niet, dan wachtte `ntp_sync` 3 × 2 s in `net_sleep_ms`, en dat beantwoordt alleen drives die nog niet klaar zijn. Leesopdrachten van de LAN-drive duurden 3-6 s, HDDRIVER gaf één keer een time-out; elke 30 s opnieuw.
+
+- Nu: alleen bij het verbinden wacht `ntp_sync` (de drives zijn dan nog niet klaar, onze driver wacht op de tijd). De latere rondes (`ntp_poll` uit `net_poll`) sturen een verzoek en kijken bij elke ronde of het antwoord er is: drie pogingen van 2 s, zonder te wachten.
+- Test (v2-cable, ST, TOS 1.04, onze driver): tijdserver op een niet-bestaande naam: elke 30 s "not found", 101 leesopdrachten, geen enkele boven 0,5 s. Bij het opstarten kreeg de eerste ronde geen antwoord, de niet-blokkerende ronde haalde de tijd daarna binnen.
+- Nog steeds wachtend: het opzoeken van de naam als die niet in de DNS-cache staat (tot 5 s, zelden).

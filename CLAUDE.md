@@ -90,8 +90,11 @@ first. The old `build/` folder (if present) is an RP2040 build: don't use it.
   with HDDRIVER when console `M` (removable, INQUIRY RMB) is on (UNIT ATTENTION at its next
   TEST UNIT READY; only after 3 or more TURs since the reset: EmuTOS sends one at boot
   and never hears of it). `M` must stay off with AHDI: it then logs the drives in again and
-  again, reading the whole FAT, and lazy loading stops (tried 2026-10-25). tnfsd drops idle sessions after 600 s; the firmware mounts again on
-  status 0xFF. A drive that fails shows NET_ERR.TXT until console `N`.
+  again, reading the whole FAT, and lazy loading stops (tried 2026-10-25). No partitions
+  over 16 MB (bigger logical sectors): TOS 1.x allows ~32000 sectors and clusters, so the
+  FAT would have 8-16 sectors instead of 64, all "seen" after a few files are opened, and
+  lazy loading would hit the ceiling more often (decided 2026-10-25). tnfsd drops idle
+  sessions after 600 s; the firmware mounts again on status 0xFF. A drive that fails shows NET_ERR.TXT until console `N`.
 - **SD card** (SPI0: GP2 CLK, GP3 MOSI, GP4 MISO, GP5 CS; FatFs in `third_party/fatfs`,
   FAT32/exFAT, long names as 8.3): an SD drive is a folder of the card through the same
   virtual FAT as TNFS; it comes up before Wi-Fi and also without it; no card or folder:
@@ -147,18 +150,12 @@ first. The old `build/` folder (if present) is an RP2040 build: don't use it.
 1. Test the v2 firmware on the TT (AHDI); on the Mega STE (HDDRIVER, `M` on) check that
    a full drive still starts afresh with the rule of 3 TEST UNIT READYs (ST with our
    driver, ST with AHDI and EmuTOS work on v2-cable, also STinG and the SD drive).
-2. More room per drive, phase B: more than 16 MB per drive (bigger logical sectors, as
-   AHDI does), so Show Info on a large server fits (Frank's LAN drive: 122 MB). Phase A
-   (two builds, one shared store of 2400 nodes in prod) is done.
-3. While core0 waits for NTP (server not answering), Atari reads of ready TNFS drives
-   wait too: 3-6 s, HDDRIVER timed out once (Mega STE, 2026-10-25). net_sleep_ms only
-   serves drives that are not ready.
-4. New system files on C: without `R` (sysfiles cannot tell new from deleted on purpose).
-5. SD card: still to test on a PC, with exFAT and without Wi-Fi; card swap while the
+2. New system files on C: without `R` (sysfiles cannot tell new from deleted on purpose).
+3. SD card: still to test on a PC, with exFAT and without Wi-Fi; card swap while the
    Atari runs (now: `N` and a reset; the socket has card detect on GP1).
-6. C: robustness: a CHKDSK-like console command.
-7. TNFS read cache; `pun_ptr` check next to AHDI/HDDRIVER; drop debug buffers (~100 KB).
-8. First release after the tests and the hardware.
+4. C: robustness: a CHKDSK-like console command.
+5. TNFS read cache; `pun_ptr` check next to AHDI/HDDRIVER.
+6. First release after the tests and the hardware.
 
 ## Test setup
 

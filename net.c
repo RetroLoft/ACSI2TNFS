@@ -858,39 +858,88 @@ static void ntp_rx(void *arg, struct udp_pcb *upcb, struct pbuf *p,
     pbuf_free(p);
 }
 
-static bool ntp_sync(void)
+/* one request to the time server (ntp_rx sets ntp_rx_unix) */
+static bool ntp_send(void)
 {
-    ip_addr_t ip;
-    if (!resolve_host(g_set.ntp_server, &ip)) {
+    static ip_addr_t ip;
+    if (!resolve_host(g_set.ntp_server, &ip)) {         /* the DNS cache, mostly */
         printf("net: NTP server '%s' not found\n", g_set.ntp_server);
         return false;
     }
     cyw43_arch_lwip_begin();
     if (!ntp_pcb && (ntp_pcb = udp_new_ip_type(IPADDR_TYPE_V4)) != NULL)
         udp_recv(ntp_pcb, ntp_rx, NULL);
+    ntp_rx_unix = 0;
+    struct pbuf *p = ntp_pcb ? pbuf_alloc(PBUF_TRANSPORT, 48, PBUF_RAM) : NULL;
+    if (p) {
+        memset(p->payload, 0, 48);
+        ((uint8_t *)p->payload)[0] = 0x23;              /* version 4, client */
+        udp_sendto(ntp_pcb, p, &ip, 123);
+        pbuf_free(p);
+    }
     cyw43_arch_lwip_end();
-    if (!ntp_pcb) return false;
+    return p != NULL;
+}
+
+static void ntp_got(void)
+{
+    clock_set(ntp_rx_unix);
+    printf("net: [%lu ms] NTP time from %s\n", (unsigned long)(time_us_64() / 1000), g_set.ntp_server);
+}
+
+/* at connect: three tries of 2 s, waiting (the drives are not ready yet and
+   the driver may be waiting for the time at boot) */
+static bool ntp_sync(void)
+{
     for (int attempt = 0; attempt < 3; attempt++) {
-        ntp_rx_unix = 0;
-        cyw43_arch_lwip_begin();
-        struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, 48, PBUF_RAM);
-        if (p) {
-            memset(p->payload, 0, 48);
-            ((uint8_t *)p->payload)[0] = 0x23;          /* version 4, client */
-            udp_sendto(ntp_pcb, p, &ip, 123);
-            pbuf_free(p);
-        }
-        cyw43_arch_lwip_end();
+        if (!ntp_send()) return false;
         absolute_time_t until = make_timeout_time_ms(2000);
         while (!ntp_rx_unix && !time_reached(until)) net_sleep_ms(5);
-        if (ntp_rx_unix) {
-            clock_set(ntp_rx_unix);
-            printf("net: [%lu ms] NTP time from %s\n", (unsigned long)(time_us_64() / 1000), g_set.ntp_server);
-            return true;
-        }
+        if (ntp_rx_unix) { ntp_got(); return true; }
     }
     printf("net: no answer from NTP server %s\n", g_set.ntp_server);
     return false;
+}
+
+/* later rounds from net_poll: the same three tries, without waiting, so the
+   Atari's reads of the drives are answered meanwhile (a server that did not
+   answer stalled them for 6 s every 30 s) */
+static int ntp_try;                     /* 0: no round running */
+static absolute_time_t ntp_try_until;
+
+static void ntp_round_end(bool ok)
+{
+    ntp_try = 0;
+    if (ok) ntp_fails = 0;
+    else if (ntp_fails < NTP_FAST_RETRIES && ++ntp_fails >= NTP_FAST_RETRIES &&
+             clk_state != CLK_VALID)
+        clk_state = CLK_NONE;           /* the driver stops waiting */
+    ntp_next = make_timeout_time_ms(ok ? NTP_RESYNC_MS :
+                                    ntp_fails < NTP_FAST_RETRIES ? NTP_FAST_MS : NTP_RETRY_MS);
+}
+
+static void ntp_poll(void)
+{
+    if (ntp_try) {
+        if (ntp_rx_unix) { ntp_got(); ntp_round_end(true); }
+        else if (time_reached(ntp_try_until)) {
+            if (ntp_try < 3 && ntp_send()) {
+                ntp_try++;
+                ntp_try_until = make_timeout_time_ms(2000);
+            } else {
+                printf("net: no answer from NTP server %s\n", g_set.ntp_server);
+                ntp_round_end(false);
+            }
+        }
+        return;
+    }
+    if (g_set.rtc_enabled && !test_req && net_link_up() && (clk_sync_now || time_reached(ntp_next))) {
+        clk_sync_now = false;
+        if (ntp_send()) {
+            ntp_try = 1;
+            ntp_try_until = make_timeout_time_ms(2000);
+        } else ntp_round_end(false);
+    }
 }
 
 static const char *tnfs_err(uint8_t st)
@@ -2305,6 +2354,7 @@ static void tnfs_connect_and_scan(void)
     if (g_set.rtc_enabled) {
         if (clk_state != CLK_VALID) clk_state = CLK_NTP;
         ntp_fails = 0;
+        ntp_try = 0;                        /* a round from net_poll is overtaken */
         bool ok = ntp_sync();
         if (!ok) ntp_fails = 1;     /* CLK_NTP stays: quick retries from net_poll */
         ntp_next = make_timeout_time_ms(ok ? NTP_RESYNC_MS : NTP_FAST_MS);
@@ -2340,16 +2390,7 @@ void net_poll(void)
 {
     net_bridge_publish();                           /* Wi-Fi state for NET_INFO */
     wifi_led_update();
-    if (g_set.rtc_enabled && !test_req && net_link_up() && (clk_sync_now || time_reached(ntp_next))) {
-        clk_sync_now = false;
-        bool ok = ntp_sync();
-        if (ok) ntp_fails = 0;
-        else if (ntp_fails < NTP_FAST_RETRIES && ++ntp_fails >= NTP_FAST_RETRIES &&
-                 clk_state != CLK_VALID)
-            clk_state = CLK_NONE;   /* the driver stops waiting */
-        ntp_next = make_timeout_time_ms(ok ? NTP_RESYNC_MS :
-                                        ntp_fails < NTP_FAST_RETRIES ? NTP_FAST_MS : NTP_RETRY_MS);
-    }
+    ntp_poll();
     if (test_req) {
         test_req = false;
         tnfs_connect_and_scan();

@@ -257,6 +257,23 @@ Nu leest de Pico na het mounten de hele boom in en geeft elk bestand en elke map
 - Tweede ronde: geen rare dingen meer. Eén leesopdracht van 237 mislukte: een TNFS-READ kreeg vier keer 1 s geen antwoord en de herhaling ook, daarna werkte alles weer. Vanaf de PC leest hetzelfde bestand foutloos (0,8 ms per READ); vermoedelijk hapert de Wi-Fi van de Pico (ook de eerste verbindingspoging mislukt bij elke start). Volgende stap: RSSI in de console en een melding bij elke retry.
 - Nog te testen: onze driver op een ST met TOS 1.04 (vooral schrijven en reset).
 
+**Fase 2: ontwerp (25 oktober 2026)**
+
+Het plafond: `vdir_load` kan een map niet helemaal plaatsen omdat de clusters (16 MB vol, of alle FAT-sectoren al door de Atari gelezen), de knooppunten (341 per drive bij drie drives) of de namenruimte op zijn. De map toont dan een deel van zijn entries ("some skipped"). *Show Info* op de desktop loopt de hele boom van een drive door (bestanden tellen): dan gaat de adapter elke map inlezen en raakt hij snel aan het plafond (gezien op de LAN-drive: knooppunten op bij GAMES/1/LOOM, alles daarna leeg tot een reset).
+
+- **Wanneer opnieuw beginnen:** alleen als dat helpt: er zijn sinds de start van de boom meer dan 8 andere mappen ingelezen (niet alleen het pad naar deze map), en de map past met een verse boom (de clusters van al zijn entries plus die van de root minder dan 16 MB). Een map die zelf te groot is, blijft "skipped" (anders begint de drive steeds opnieuw). Een map met meer dan 254 entries telt niet als plafond.
+- **Alleen met onze driver.** Die vraagt bij elke `hdv_mediach` de tellers op (vendor sub 10) en meldt een gewijzigde drive, waarna GEMDOS zijn buffers weggooit en alles opnieuw leest. AHDI, HDDRIVER en EmuTOS doen dat niet: bij hen zou een verse boom onder een oude FAT-cache van GEMDOS liggen. De firmware onthoudt per Atari-sessie of sub 10 gevraagd is.
+- **Pas als de drive 2 s niets meer gelezen of geschreven heeft** en er niets meer naar de server moet (`wr_pending`). Dan loopt er geen Fread meer over de oude clusters: GEMDOS kijkt een gewijzigde drive pas na bij de volgende bestandsbewerking.
+- **Dan:** de boom van die drive opnieuw vanaf de root (`vfat_scan`, zoals bij een reset van de Atari), en de teller van de drive ophogen (`disk_changed`). Bij de volgende toegang ziet GEMDOS de wijziging en leest het FAT en mappen opnieuw; de map die maar half te zien was, past nu.
+- **Voor de gebruiker:** de map sluiten en opnieuw openen (of Esc op de desktop van TOS 2.06).
+- **Fase 2b (later):** HDDRIVER via UNIT ATTENTION op TEST UNIT READY.
+
+**Fase 2a: testverslag (25 oktober 2026, v2-cable op een ST met onze driver)**
+
+- Reset, LAN-drive, *Show Info*: TOS liep de hele boom door; vanaf GAMES/1/LOOM waren de knooppunten op (`nodes 341/341`, clusters tot 16089), 36 mappen "some skipped: no room left, starting afresh when idle", met 0 entries in de cache van TOS.
+- Daarna één keer `tree started afresh, media change reported`; GAMES/2 (24 entries), GAMES/1/PACMAN (6 entries), OLD en TOOLS weer gevuld, een spel gestart. Geen TIMEOUT, PROTOCOL of mismatch.
+- Eerste versie reageerde alleen op clusters op, niet op knooppunten op: Show Info liet dan alles leeg tot een reset.
+
 ## StinG zonder XControl en STINGINS.TOS: testverslag (12 oktober 2026, Mega STE)
 
 - StinG met de bestanden uit de back-up werkte op de Mega STE (HDDRIVER, adapter op ID 1), met XControl. Zonder XControl gaf URLVIEW "Destination host is unreachable", ook naar het eigen netwerk; er kwam geen enkel frame bij de Pico. De poortinstellingen (IP, actief) uit STING.PRT past alleen STNGPORT.CPX toe, bij het opstarten van XControl.

@@ -499,6 +499,11 @@ typedef struct {
     uint16_t va0, van;
     uint32_t next_cl;               /* clusters below are handed out         */
     uint64_t fseen;                 /* FAT sectors the Atari read since its reset */
+    uint32_t root_cl;               /* next_cl after the root's own runs     */
+    uint32_t nospace;               /* entries left out: no clusters, nodes or names */
+    uint16_t loads;                 /* folders read since the tree started   */
+    bool     restart;               /* a folder did not fit: start afresh (net_poll) */
+    uint32_t last_req_ms;           /* last Atari read or write of this drive */
     uint32_t files, dirs, skipped;
     volatile bool ready;
     /* open file cache */
@@ -1105,6 +1110,7 @@ static bool vscan_room(uint16_t d, const char *name)
     if (dr->node_end < dr->node_limit && vn[d].child_count < max &&
         dr->pool_end + strlen(name) + 1 <= dr->pool_limit) return true;
     dr->skipped++;
+    if (vn[d].child_count < max) dr->nospace++;    /* not just a folder too long */
     return false;
 }
 
@@ -1310,7 +1316,7 @@ static uint32_t vrun(uint32_t ncl)
 static bool vdir_load(uint16_t dir)
 {
     vdrive_t *d = cur;
-    uint32_t skipped0 = d->skipped;
+    uint32_t skipped0 = d->skipped, nospace0 = d->nospace, need = 0;
     if (!vscan_dir(dir)) return false;
     vn[dir].flags |= VF_LOADED;
     uint16_t i0 = vn[dir].child_start;
@@ -1318,9 +1324,11 @@ static bool vdir_load(uint16_t dir)
         vnode_t *v = &vn[i];
         uint32_t ncl = v->isdir ? V_DIRCL : (v->size + V_CLBYTES - 1) / V_CLBYTES;
         uint32_t c = ncl ? vrun(ncl) : 0;
+        need += ncl;
         if (ncl && !c) {                    /* does not fit this session */
             v->flags |= VF_HIDE;
             d->skipped++;
+            d->nospace++;
             ncl = 0;
         }
         v->first_cl = v->start_cl = (uint16_t)c;
@@ -1328,13 +1336,20 @@ static bool vdir_load(uint16_t dir)
         v->sig = run_sig(c, ncl);
         if (ncl) valloc[d->va0 + d->van++] = i;
     }
+    /* the clusters (16 MB, or the FAT the Atari has not read), the nodes or
+       the names ran out: a fresh tree helps if other folders took the room
+       (not just the path to this one) and this one fits next to the root */
+    if (dir != d->root && ++d->loads > 8 && d->nospace != nospace0 &&
+        need + d->root_cl + 64 <= V_NCL + 2)
+        d->restart = true;
     if (dir != d->root) {
         static char p[256];
         vpath(dir, p, sizeof p);
         printf("net: %s %d: read %s: %u entries, clusters up to %lu, nodes %u/%u%s\n",
                d->sd ? "SD" : "TNFS", (int)(d - vd) + 1, p, vn[dir].child_count, (unsigned long)d->next_cl,
                d->node_end - d->root, d->node_limit - d->root,
-               d->skipped != skipped0 ? " (some skipped)" : "");
+               d->restart ? " (some skipped: no room left, starting afresh when idle)"
+               : d->skipped != skipped0 ? " (some skipped)" : "");
     }
     return true;
 }
@@ -1365,6 +1380,9 @@ static void vfat_scan(void)
     vn[r].isdir = 1;
     vn[r].name_off = 0;                                     /* vpool[0] = "" */
     vdir_load(r);
+    d->root_cl = d->next_cl;
+    d->restart = false;
+    d->loads = 0;
     int k = (int)(d - vd);
     memset(wbits[k], 0, sizeof wbits[k]);
     memset(dbits[k], 0, sizeof dbits[k]);
@@ -1880,6 +1898,7 @@ static void vreq_service(void)
             cur->fseen |= 1ull << ((rel - 1) % V_SPF);
     }
     if (held) cur->ready = true;
+    if (ok) cur->last_req_ms = to_ms_since_boot(get_absolute_time());
     if (vreq_write) fsec_rel = -1;          /* the FAT may have changed */
     cur = save;
     __dmb();
@@ -2317,8 +2336,23 @@ void net_poll(void)
         atari_reset = false;
     }
     vreq_service();
-    /* a second after the last write: bring the server in line */
     uint32_t now = to_ms_since_boot(get_absolute_time());
+    /* a folder did not fit (vdir_load): start the drive's tree afresh and
+       report a media change. Only with our driver, which asks for the change
+       counters (vendor sub 10): with the others GEMDOS would keep its old FAT.
+       Only after 2 s without reads or writes and with everything synced, so
+       no file read still runs on the old clusters. */
+    for (int i = 0; i < nvd && vreq_state != 1; i++) {
+        vdrive_t *d = &vd[i];
+        if (!d->restart || !d->ready || d->wr_pending || !g_mc_driver || now - d->last_req_ms < 2000)
+            continue;
+        cur = d;
+        vfat_scan();
+        cur = NULL;
+        disk_changed(1 + i);
+        printf("net: %s %d: tree started afresh, media change reported\n", d->sd ? "SD" : "TNFS", i + 1);
+    }
+    /* a second after the last write: bring the server in line */
     for (int i = 0; i < nvd && vreq_state != 1; i++)
         if (vd[i].wr_pending && now - vd[i].last_wr_ms > 1000) {
             cur = &vd[i];

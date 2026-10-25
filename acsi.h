@@ -173,6 +173,9 @@ void net_clock_toggle(void);                           /* console K */
    TNFS drives), bumped when the Pico changed that partition under the Atari;
    the driver reads them with vendor sub 10 from hdv_mediach */
 extern volatile uint8_t g_part_gen[4];
+/* our driver asked for them since the last Atari reset: it reports media
+   changes to GEMDOS (AHDI, HDDRIVER and EmuTOS do not) */
+extern volatile bool g_mc_driver;
 void disk_changed(int part);                /* bump + keep GEMDOS off until seen */
 
 /* system files on C: (sysfiles.c): number written, -1 on error */

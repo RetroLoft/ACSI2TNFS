@@ -136,8 +136,9 @@ first. The old `build/` folder (if present) is an RP2040 build: don't use it.
 
 1. Test the v2 firmware on the soldered v2-cable: console first, then sniffer, then
    target (boot from C:, write, TNFS, STinG).
-2. TNFS lazy loading phase 2: at the ceiling (16 MB full or all FAT sectors read) a
-   media change; for HDDRIVER through UNIT ATTENTION on TEST UNIT READY (tried once).
+2. TNFS lazy loading phase 2b: the ceiling for HDDRIVER through UNIT ATTENTION on TEST
+   UNIT READY (tried once). Phase 2a (our driver: fresh tree + media change after 2 s
+   idle) works.
 3. New system files on C: without `R` (sysfiles cannot tell new from deleted on purpose).
 4. SD card: still to test on a PC, with exFAT, without Wi-Fi and under HDDRIVER; card
    swap while the Atari runs (now: `N` and a reset).

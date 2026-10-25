@@ -177,12 +177,17 @@ The time zone is a fixed offset from UTC: change it by hand for summer time.
   the size of the folder behind it. A single file larger than that cannot be shown.
 - **The FAT can fill up.** The adapter builds each drive's FAT while you use it: a
   folder gets its place in the 16 MB the first time the Atari opens it, and keeps it
-  until the next Atari reset. Browse through many large files and the 16 MB of this
+  until the drive starts afresh. Browse through many large files and the room of this
   session runs out: folders you open after that show only part of their files. The same
-  happens once TOS has read the whole FAT, e.g. after a program asked for the free space:
-  TOS keeps the FAT in memory, so the adapter cannot add to it. **A reset of the Atari
-  starts the drive afresh** from the root. The USB console (`n`) then says "some
-  skipped".
+  happens once TOS has read the whole FAT (e.g. after a program asked for the free
+  space), and *Show Info* on a drive reads every folder of it.
+  - **With the adapter's own driver** the drive then starts afresh by itself: once it
+    has been idle for 2 seconds, the adapter reports a media change and TOS reads the
+    drive again. Close the folder and open it again (or press Esc on the TOS 2.06
+    desktop).
+  - **With AHDI, HDDRIVER or EmuTOS:** reset the Atari to start the drive afresh.
+  - A single folder larger than 16 MB always shows only part of its files. The USB
+    console (`n`) says "some skipped".
 - **Number of files:** at most 511 entries in the root of a drive and 254 in a folder;
   and about 1000 files and folders in all the folders the Atari has opened since its
   reset, shared evenly by the drives (with three drives about 340 each).

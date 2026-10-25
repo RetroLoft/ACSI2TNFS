@@ -100,4 +100,4 @@ A system file that was deleted, or one that is new in the firmware, comes on C: 
 | Network drive empty | Still connecting at start-up, or console `n`: server reachable? folder correct? |
 | Drive shows only `NET_WAIT.TXT` | The adapter is still connecting: open the drive again in a moment |
 | SD drive shows only `SD_ERR.TXT` | No card, not FAT32/exFAT, or the folder is missing; fix it, console `N` and reset the Atari |
-| Folder shows only part of its files | The 16 MB of this session are used up, or TOS has read the whole FAT: reset the Atari (see [Limitations](../README.md#limitations)) |
+| Folder shows only part of its files | The room of this session is used up, or TOS has read the whole FAT (also *Show Info*). Our driver: wait 2 s, close and open the folder again. AHDI/HDDRIVER: reset the Atari (see [Limitations](../README.md#limitations)) |

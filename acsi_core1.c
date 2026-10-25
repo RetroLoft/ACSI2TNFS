@@ -191,6 +191,7 @@ static uint32_t acks;            /* /ACK pulses in current data phase    */
 static uint8_t  sense_code;      /* ACSI error code for REQUEST SENSE    */
 static uint8_t  sense_key, sense_asc;
 static volatile int pending_id = -1; /* new id, applied on next Atari reset */
+volatile bool g_mc_driver;       /* our driver asked for the change counters */
 
 /* core0 (configuration program): the id to use from the next Atari reset or
    Pico restart. Not at once: the Atari still talks to the current id. */
@@ -683,6 +684,7 @@ static uint8_t exec_cmd(const uint8_t *cdb, uint8_t cdb_len, uint32_t *bytes)
             reply[3] = 4;
             for (int k = 0; k < 4; k++) reply[4 + k] = g_part_gen[k];
             g_cfg.mute_until_reset = false;
+            g_mc_driver = true;
             *bytes = 512;
             return send_reply(512);
         case 0x20:  /* ACSI_NET NET_INFO, 512 bytes Pico -> Atari (netbridge.c) */
@@ -854,6 +856,7 @@ static void __not_in_flash_func(target_loop)(void)
                 g_cfg.mute_until_reset = false;     /* fresh GEMDOS: safe again */
                 net_bridge_reset();                 /* STinG is gone */
                 net_atari_reset();                  /* fresh GEMDOS: TNFS from the root */
+                g_mc_driver = false;                /* which driver loads is not known yet */
                 stage_flush();                      /* core0 may change C: now */
                 stage_blk = -1;
                 bus_idle();

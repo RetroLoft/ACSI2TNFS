@@ -93,11 +93,12 @@ Limitations of TNFS and SD drives
     with a dot are hidden.
   - 16 MB per drive, whatever the size of the folder behind it.
   - The FAT can fill up: a folder gets its place in the 16 MB
-    when the Atari first opens it, until the next reset. When
-    the 16 MB of this session are used up, or TOS has read the
-    whole FAT (e.g. for the free space), folders opened after
-    that show only part of their files. Reset the Atari: the
-    drive starts afresh.
+    when the Atari first opens it. When the room is used up,
+    or TOS has read the whole FAT (free space, Show Info),
+    folders opened after that show only part of their files.
+    With the adapter's own driver the drive starts afresh by
+    itself after 2 s: close the folder and open it again.
+    With AHDI or HDDRIVER: reset the Atari.
   - At most 511 entries in the root and 254 in a folder.
   - Changes made on a PC are seen after an Atari reset.
   - The Atari writes sectors; about a second later the adapter

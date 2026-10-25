@@ -710,7 +710,6 @@ static uint8_t exec_cmd(const uint8_t *cdb, uint8_t cdb_len, uint32_t *bytes)
             if (c[4] < 1) break;
             uint32_t n;
             uint8_t *b = net_rx_next(reply, c[4], &n);
-            if (b != reply) gpio_put(PIN_LED, 1);
             *bytes = n * 512u;
             if (!dma_out2(b, n * 512u, NULL, 0)) return 0x02;
             net_rx_sent(b);
@@ -760,9 +759,13 @@ static void __not_in_flash_func(handle_command)(uint32_t s0)
         if (n < len) irq_assert();
     }
 
-    /* activity led; STinG polls NET_RX many times a second, so that one
-       lights it only when a frame goes to the Atari */
-    if (!((L.cdb[0] & 0x1f) == 0x11 && L.cdb[3] == 0x23)) gpio_put(PIN_LED, 1);
+    /* disk led: READ/WRITE (6) and (10); core0 switches it off again */
+    uint8_t op = L.cdb[0] & 0x1f;
+    if (op == 0x1f) op = L.cdb[1];
+    if (op == 0x08 || op == 0x0a || op == 0x28 || op == 0x2a) {
+        g_disk_led_t = time_us_32();
+        gpio_put(PIN_LED_DISK, 1);
+    }
     acks = 0;
     ack_drain(NULL);
     ackcap_n = 0;
@@ -799,7 +802,6 @@ static void __not_in_flash_func(handle_command)(uint32_t s0)
     if (!status_phase(L.status) && L.result == RES_OK) L.result = res;
 
 done:
-    gpio_put(PIN_LED, 0);
     g_stats.commands++;
     if (L.bytes && L.acks != L.bytes && L.result == RES_OK) g_stats.ack_mismatch++;
     L.cdb_len = n;
@@ -916,8 +918,8 @@ void acsi_hw_init(void)
     gpio_put(PIN_IRQ, 0); gpio_set_dir(PIN_IRQ, GPIO_OUT);
     gpio_put(PIN_DRQ, 0); gpio_set_dir(PIN_DRQ, GPIO_OUT);
 
-    gpio_init(PIN_LED); gpio_put(PIN_LED, 0); gpio_set_dir(PIN_LED, GPIO_OUT);
-    gpio_init(PIN_PWR_LED); gpio_put(PIN_PWR_LED, 1); gpio_set_dir(PIN_PWR_LED, GPIO_OUT);
+    gpio_init(PIN_LED_DISK);   gpio_put(PIN_LED_DISK, 0);   gpio_set_dir(PIN_LED_DISK, GPIO_OUT);
+    gpio_init(PIN_LED_STATUS); gpio_put(PIN_LED_STATUS, 1); gpio_set_dir(PIN_LED_STATUS, GPIO_OUT);
     gpio_init(PIN_BUTTON); gpio_pull_up(PIN_BUTTON);
 
     /* claim our state machines so the Wi-Fi driver (CYW43 uses a PIO SM for

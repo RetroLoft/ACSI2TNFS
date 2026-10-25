@@ -34,6 +34,8 @@ acsi_cfg_t g_cfg = { .mode = MODE_TARGET, .acsi_id = ACSI_DEFAULT_ID, .verbose =
    restart the driver always sees a change and GEMDOS re-reads everything */
 volatile uint8_t g_part_gen[4];
 
+volatile uint32_t g_disk_led_t;
+
 void disk_changed(int part)
 {
     g_part_gen[part]++;
@@ -419,9 +421,6 @@ int main(void)
     acsi_hw_init();
     net_init();
 
-    gpio_init(PIN_LED_PICO);
-    gpio_set_dir(PIN_LED_PICO, GPIO_OUT);
-
     flash_safe_execute_core_init();
     multicore_launch_core1(core1_main);
     t_origin = time_us_32();
@@ -436,7 +435,6 @@ int main(void)
     if (!full_seed && sysfiles_sync(disk_seed, false) > 0)
         disk_changed(0);                    /* a running Atari has the old FAT cached */
 
-    uint32_t last_hb = 0;
     bool was_connected = false;
     for (;;) {
         acsi_event_t e;
@@ -470,15 +468,12 @@ int main(void)
         if (ch >= 0) console(ch);
 
         if (g_cfg.save_req) { g_cfg.save_req = false; cfg_save(); }
-        if (!BOARD_HAS_WIFI && now - last_hb > 500000) {  /* W: led shared with core1 */
-            last_hb = now;
-            gpio_put(PIN_LED_PICO, g_cfg.mode == MODE_TARGET ? 1 : !gpio_get(PIN_LED_PICO));
-        }
         button_poll(now);
-        if (BOARD_HAS_WIFI) {               /* hidden: the Pico's own led blinks slowly */
-            static int led = -1;
-            int want = g_cfg.hidden && (now / 1000000) % 2;
-            if (want != led) { led = want; net_led(want); }
-        }
+        /* D1 stays on 1 s after the last disk access, so a short one shows
+           (the current time: core1 may have set g_disk_led_t after "now");
+           D2 is on, and blinks while the adapter is hidden */
+        if (gpio_get_out_level(PIN_LED_DISK) && (int32_t)(time_us_32() - g_disk_led_t) > 1000000)
+            gpio_put(PIN_LED_DISK, 0);
+        gpio_put(PIN_LED_STATUS, !g_cfg.hidden || (now / 500000) % 2);
     }
 }

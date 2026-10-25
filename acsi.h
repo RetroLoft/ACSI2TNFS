@@ -6,7 +6,7 @@
 /* ---------------------------------------------------------------------------
    Pin map of v2 and v2-cable (hardware/README.md)
 --------------------------------------------------------------------------- */
-#define PIN_PWR_LED 0   /* power led                                          */
+#define PIN_LED_DISK 0  /* D1: flashes on disk activity (READ/WRITE)          */
 #define PIN_DBUS    6   /* D7..D0 = GP6..GP13 (reversed); first pin of a PIO sample */
 #define PIN_DIR     14  /* U1 DIR, 1 = Atari -> Pico, 0 = Pico -> Atari       */
 #define PIN_OE      15  /* U1 /OE, low = databuffer enabled                   */
@@ -18,16 +18,15 @@
 #define PIN_IRQ     21  /* through the 74LS07, low = /IRQ asserted. The GPIO  */
 #define PIN_DRQ     22  /* output is inverted: 1 = asserted for code and PIO  */
 #define PIN_BUTTON  26  /* button to GND (hidden mode)                        */
-#define PIN_LED     28  /* status led                                         */
+#define PIN_LED_STATUS 28 /* D2: on, blinking while hidden                     */
 #ifdef CYW43_WL_GPIO_LED_PIN
-/* Pico W / Pico 2 W: the onboard led hangs on the Wi-Fi chip and GP25 is its
-   SPI chip select, so never touch GP25 there; use the PCB status led. */
-#define PIN_LED_PICO PIN_LED
 #define BOARD_HAS_WIFI 1
 #else
-#define PIN_LED_PICO 25 /* onboard led of the Pico (non-W)                    */
 #define BOARD_HAS_WIFI 0
 #endif
+
+/* time of the last disk access (core1), for the disk led (core0) */
+extern volatile uint32_t g_disk_led_t;
 
 static inline uint8_t rev8(uint8_t b)
 {
@@ -161,7 +160,6 @@ void acsi_hw_init(void);
 /* network (net.c) - only functional on boards with Wi-Fi */
 void net_init(void);                                   /* core0, at start      */
 void net_poll(void);                                   /* core0, main loop     */
-void net_led(bool on);                                 /* core0: the Pico's own led (W) */
 void net_request_test(void);                           /* console N: reconnect */
 uint32_t net_status_text(char *p, uint32_t max);       /* console n            */
 uint32_t net_vdrives(void);                            /* TNFS partitions (fixed after start-up) */

@@ -110,7 +110,8 @@ USB console of the Pico (any baud rate, it is USB)
   R = restore system files              F = rewrite this drive
   B = BOOTSEL (firmware update)         h = help
 The button on the board: a short press hides or shows the
-adapter (like H); while hidden the Pico's led blinks slowly.
-Reset the Atari after pressing it.
+adapter (like H). Reset the Atari after pressing it.
+Leds: D1 flashes on disk activity; D2 is on, and blinks while
+the adapter is hidden.
 
 More: github.com/RetroLoft/ACSI2TNFS

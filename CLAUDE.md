@@ -49,7 +49,9 @@ first. The old `build/` folder (if present) is an RP2040 build: don't use it.
   RSSI and TNFS retries), `N` rescan TNFS drives, `R` restore system files on C:, `F`
   rewrite C:, `H` hidden, `s`/`t` sniffer/target mode, `0`-`7` ACSI id, `c` SD card test
   (type, size, partitions), `o` /OE pull-up test (U1 as after a reset). A short press on
-  the board's button (GP26) also toggles hidden mode. Not the BOOTSEL button: reading it
+  the board's button (GP26) also toggles hidden mode. Leds: D1 (GP0) disk activity, on
+  1 s after the last READ/WRITE; D2 (GP28) on, blinking while hidden; the Pico's own led
+  is not used. Not the BOOTSEL button: reading it
   needs flash_safe_execute, which held core1 off ~150 us every 100 ms (the /ACK check of
   big reads then missed ~160 strobes; the data itself was fine).
 

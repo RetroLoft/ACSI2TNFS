@@ -167,7 +167,8 @@ and parts.
   **U2** 74LVC245: /CS, /RESET, /ACK, A1 and R/W to the Pico, fixed direction.
   **U3** 74LS07: /IRQ and /DRQ as open-collector outputs.
 - **Card1:** micro SD socket on SPI0, with card detect.
-- **SW1:** button (hidden mode on/off). **Leds:** power and status.
+- **SW1:** button (hidden mode on/off). **Leds:** D1 disk activity, D2 status (on, blinking
+  while hidden); on `v2-cable` D3 and D4 when the 3 mm leds are fitted.
 
 ### Design rules learnt the hard way
 
@@ -186,14 +187,14 @@ must keep off them when it is not talking:
 
 | Pico | Signal | Pico | Signal |
 |---|---|---|---|
-| GP0 | power led | GP16 | /CS |
+| GP0 | led D1 (disk activity) | GP16 | /CS |
 | GP1 | SD card detect | GP17 | /RESET |
 | GP2-GP5 | SD card: CLK, MOSI, MISO, CS | GP18 | /ACK |
 | GP6-GP13 | DATA7 ... DATA0 (reversed order) | GP19 | A1 |
 | GP14 | DIR of U1 | GP20 | R/W |
 | GP15 | /OE of U1 | GP21 | /IRQ (via U3, low = active) |
 | GP26 | button | GP22 | /DRQ (via U3, low = active) |
-| GP28 | status led | | |
+| GP28 | led D2 (status) | | |
 
 ## Files
 

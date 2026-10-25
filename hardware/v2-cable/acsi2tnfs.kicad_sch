@@ -8697,7 +8697,7 @@
 				)
 			)
 		)
-		(property "Value" "LED"
+		(property "Value" "LED blue"
 			(at 187.6425 194.31 0)
 			(effects
 				(font
@@ -11463,7 +11463,7 @@
 				)
 			)
 		)
-		(property "Value" "LED"
+		(property "Value" "LED yellow"
 			(at 187.6425 182.88 0)
 			(effects
 				(font
@@ -12077,7 +12077,7 @@
 				)
 			)
 		)
-		(property "Value" "LED"
+		(property "Value" "LED blue"
 			(at 187.6425 170.18 0)
 			(effects
 				(font
@@ -12220,7 +12220,7 @@
 				)
 			)
 		)
-		(property "Value" "LED"
+		(property "Value" "LED yellow"
 			(at 187.6425 158.75 0)
 			(effects
 				(font
@@ -12498,7 +12498,7 @@
 				)
 			)
 		)
-		(property "Value" "330R"
+		(property "Value" "470"
 			(at 210.82 158.75 90)
 			(effects
 				(font
@@ -12739,7 +12739,7 @@
 				)
 			)
 		)
-		(property "Value" "330R"
+		(property "Value" "470"
 			(at 210.82 170.18 90)
 			(effects
 				(font

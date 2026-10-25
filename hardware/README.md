@@ -150,12 +150,12 @@ and parts.
 | U3 | 74LS07 | SOIC-14 | |
 | Card1 | TF-01A micro SD socket (LCSC C91145) | SMD | push-push |
 | R1, R2, R5-R8 | 10k | 0805 | |
-| R3, R4 | 330 Ω | 0805 | led resistors |
+| R3, R4 | 470 Ω | 0805 | led resistors |
 | C1, C5, C7 | 10 µF | 0805 | |
 | C2, C3, C4, C6 | 100 nF | 0805 | |
 | SW1 | 6 mm tactile switch, right angle (Alps SKHH footprint) | THT | |
-| D1, D2 (`v2`) | led 3 mm | THT | bent forward |
-| D1, D2 / D3, D4 (`v2-cable`) | led 0805 / led 3 mm | SMD / THT | fit **either** D1 **or** D3, and D2 **or** D4 |
+| D1, D2 (`v2`) | led 3 mm: D1 yellow, D2 blue | THT | bent forward |
+| D1, D2 / D3, D4 (`v2-cable`) | led 0805 / led 3 mm: D1/D3 yellow, D2/D4 blue | SMD / THT | fit **either** D1 **or** D3, and D2 **or** D4 |
 | J1 (`v2`) | 19 × WAGO 243-131 | THT | the DB19 plug |
 | J1, J2 (`v2-cable`) | 2x10 box header, 2.54 mm, straight or right angle | THT | the lid of the case depends on it |
 

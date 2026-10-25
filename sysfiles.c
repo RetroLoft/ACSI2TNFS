@@ -6,7 +6,8 @@
  * files (DESKTOP.INF, an AUTO folder, ...) live next to them on the same FAT.
  * sysfiles_sync() brings the system files on C: in line with the image
  * without touching anything else: a changed file (new firmware) is replaced
- * in free clusters, and with restore_missing also a deleted one is put back.
+ * in free clusters, a new one (not in g_sysf) is added, and with
+ * restore_missing also one the user deleted is put back.
  *
  * Runs on core0 while the Atari cannot use C: (at start-up, or with the
  * adapter muted until the next Atari reset): GEMDOS caches the FAT.
@@ -230,14 +231,28 @@ static bool put_file(const vol_t *fl, const vol_t *im, const uint8_t *se, uint32
     return true;
 }
 
+sysf_known_t g_sysf;
+
+static bool sysf_known(const uint8_t *n11)
+{
+    if (g_sysf.magic != SYSF_MAGIC) return false;
+    for (uint32_t k = 0; k < g_sysf.n && k < SYSF_MAX; k++)
+        if (!memcmp(g_sysf.name[k], n11, 11)) return true;
+    return false;
+}
+
 /* returns the number of files written, -1 on an error */
-int sysfiles_sync(const uint8_t *image, bool restore_missing)
+int sysfiles_sync(const uint8_t *image, bool restore_missing, bool *known_changed)
 {
     vol_t im, fl;
+    *known_changed = false;
     if (!vol_open(&im, image) || !vol_open(&fl, NULL)) return -1;
     if (im.part != fl.part || im.spc != fl.spc || im.rdsec != fl.rdsec ||
         im.datrec != fl.datrec || im.ncl != fl.ncl) return -1;  /* other layout */
 
+    /* the next list: the system files that are on C: afterwards or were
+       known before (a file that found no room is tried again next time) */
+    sysf_known_t next = { SYSF_MAGIC, 0, { { 0 } } };
     int written = 0;
     wc_failed = false;
     for (uint32_t i = 0; i < im.rdlen * 16; i++) {
@@ -255,6 +270,8 @@ int sysfiles_sync(const uint8_t *image, bool restore_missing)
         }
         char name[13];
         snprintf(name, sizeof name, "%.8s.%.3s", (const char *)se, (const char *)se + 8);
+        bool known = sysf_known(se);
+        if ((slot >= 0 || known) && next.n < SYSF_MAX) memcpy(next.name[next.n++], se, 11);
 
         if (slot >= 0) {
             const uint8_t *fe = dirent(&fl, (uint32_t)slot);
@@ -276,17 +293,24 @@ int sysfiles_sync(const uint8_t *image, bool restore_missing)
                 c = next;
             }
         } else {
-            if (!restore_missing) continue;                 /* deleted on purpose */
+            if (known && !restore_missing) continue;        /* deleted on purpose */
             if (freeslot < 0 || free_clusters(&fl) < (size + clbytes(&fl) - 1) / clbytes(&fl)) {
                 printf("sysfiles: no room on C: for %s\n", name);
                 continue;
             }
             slot = freeslot;
+            if (!known && next.n < SYSF_MAX) memcpy(next.name[next.n++], se, 11);
         }
         if (!put_file(&fl, &im, se, (uint32_t)slot)) return -1;
-        printf("sysfiles: %s %s\n", name, restore_missing && slot == freeslot ? "restored" : "updated");
+        printf("sysfiles: %s %s\n", name, slot != freeslot ? "updated" : known ? "restored" : "added");
         written++;
     }
     wc_flush();
+    bool same = g_sysf.magic == SYSF_MAGIC && g_sysf.n == next.n;
+    for (uint32_t k = 0; same && k < next.n; k++) same = !memcmp(g_sysf.name[k], next.name[k], 11);
+    if (!same) {
+        g_sysf = next;
+        *known_changed = true;
+    }
     return wc_failed ? -1 : written;
 }

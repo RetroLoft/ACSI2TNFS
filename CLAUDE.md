@@ -70,7 +70,9 @@ first. The old `build/` folder (if present) is an RP2040 build: don't use it.
   HDDRIVER read every GEM partition as FAT16, our driver and EmuTOS go by the cluster
   count. A FAT12 C: was misread by HDDRIVER.
 - **System files on C:** a firmware update replaces changed ones at start-up (before the
-  console runs); a *new* one only comes with `R`. Don't interrupt a start-up: an erase cut
+  console runs) and adds new ones: the settings sector keeps the list of system files put
+  on C: (g_sysf), so a missing one that is on it was deleted on purpose (only `R` brings
+  it back). Don't interrupt a start-up: an erase cut
   off half-way once left FAT 2 empty (TOS reads FAT 2).
 - **Drive letters stop at P:** (TOS has 16 drives). EmuTOS on Frank's multi-TOS board
   runs C:\AUTO only after a cold start (power off/on), not after a warm reset. TOS 1.0 does not see the adapter;
@@ -150,12 +152,11 @@ first. The old `build/` folder (if present) is an RP2040 build: don't use it.
 1. Test the v2 firmware on the TT (AHDI); on the Mega STE (HDDRIVER, `M` on) check that
    a full drive still starts afresh with the rule of 3 TEST UNIT READYs (ST with our
    driver, ST with AHDI and EmuTOS work on v2-cable, also STinG and the SD drive).
-2. New system files on C: without `R` (sysfiles cannot tell new from deleted on purpose).
-3. SD card: still to test on a PC, with exFAT and without Wi-Fi; card swap while the
+2. SD card: still to test on a PC, with exFAT and without Wi-Fi; card swap while the
    Atari runs (now: `N` and a reset; the socket has card detect on GP1).
-4. C: robustness: a CHKDSK-like console command.
-5. TNFS read cache; `pun_ptr` check next to AHDI/HDDRIVER.
-6. First release after the tests and the hardware.
+3. C: robustness: a CHKDSK-like console command.
+4. TNFS read cache; `pun_ptr` check next to AHDI/HDDRIVER.
+5. First release after the tests and the hardware.
 
 ## Test setup
 

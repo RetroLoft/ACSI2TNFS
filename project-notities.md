@@ -386,3 +386,9 @@ Probleem (Mega STE, HDDRIVER): antwoordde de tijdserver niet, dan wachtte `ntp_s
 - Nu: alleen bij het verbinden wacht `ntp_sync` (de drives zijn dan nog niet klaar, onze driver wacht op de tijd). De latere rondes (`ntp_poll` uit `net_poll`) sturen een verzoek en kijken bij elke ronde of het antwoord er is: drie pogingen van 2 s, zonder te wachten.
 - Test (v2-cable, ST, TOS 1.04, onze driver): tijdserver op een niet-bestaande naam: elke 30 s "not found", 101 leesopdrachten, geen enkele boven 0,5 s. Bij het opstarten kreeg de eerste ronde geen antwoord, de niet-blokkerende ronde haalde de tijd daarna binnen.
 - Nog steeds wachtend: het opzoeken van de naam als die niet in de DNS-cache staat (tot 5 s, zelden).
+
+## Nieuwe systeembestanden op C: zonder R (25 oktober 2026)
+
+Eerst kon `sysfiles_sync` niet zien of een ontbrekend systeembestand nieuw was of door de gebruiker gewist; een nieuw bestand kwam alleen met `R`. Nu houdt de settings-sector (offset 64, `g_sysf`) bij welke systeembestanden de firmware op C: zette. Bij het opstarten: veranderd bijwerken, ontbrekend en bekend overslaan (bewust gewist), ontbrekend en onbekend toevoegen. De lijst wordt alleen opgeslagen als hij verandert. Bij de overstap is er nog geen lijst: wat dan ontbreekt, komt één keer terug.
+
+**Test (v2-cable, controle met `picotool save` in BOOTSEL):** gewone firmware: lijst met de 5 bestanden, C: ongewijzigd. Testfirmware met een extra `TESTNEW.TXT`: toegevoegd (read-only), lijst 6. Herstart zonder flashen: C: en instellingen byte voor byte gelijk. TESTNEW.TXT op de Atari gewist, Pico herstart: blijft weg. Gewone firmware terug: lijst weer 5.

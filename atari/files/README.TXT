@@ -17,9 +17,9 @@ What is on this drive?
   ACSI_NET.STX the STinG driver for the adapter
   NETCLOCK.PRG sets the clock from the network, for the AUTO
                folder when AHDI or HDDRIVER boots (see below)
-  These files are read-only. Your own files on this drive stay
-  when the firmware is updated. Deleted one anyway, or one
-  missing after an update? Key R on the USB console puts it back.
+  These files are read-only. A firmware update brings changed
+  and new ones by itself; your own files on this drive stay.
+  Deleted one anyway? Key R on the USB console puts it back.
 
 Which letter has this drive?
   - No other hard disk: the adapter boots with its own driver

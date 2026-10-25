@@ -52,8 +52,11 @@ void disk_changed(int part)
 #define CFG_MAGIC 0x41435349u   /* "ACSI" */
 typedef struct { uint32_t magic; uint8_t mode, id, verbose, hidden, removable; } cfg_flash_t;
 
-/* settings sector layout: [0] cfg_flash_t, [256] network settings (net.c) */
+/* settings sector layout: [0] cfg_flash_t, [64] the system files put on C:
+   (g_sysf), [256] network settings (net.c) */
+#define CFG_SYSF_OFFSET 64
 #define CFG_NET_OFFSET 256
+_Static_assert(CFG_SYSF_OFFSET + sizeof(sysf_known_t) <= CFG_NET_OFFSET, "settings layout");
 #define CFG_BYTES      4096   /* whole settings sector */
 const void *net_settings_blob(uint32_t *len);
 void net_settings_load(const void *blob);
@@ -62,6 +65,7 @@ static void cfg_load(void)
 {
     const cfg_flash_t *f = (const cfg_flash_t *)(XIP_BASE + CFG_FLASH_OFFSET);
     net_settings_load((const uint8_t *)f + CFG_NET_OFFSET);   /* defaults when blank */
+    memcpy(&g_sysf, (const uint8_t *)f + CFG_SYSF_OFFSET, sizeof g_sysf);   /* blank: none */
     if (f->magic != CFG_MAGIC) return;
     if (f->mode <= MODE_TARGET) g_cfg.mode = f->mode;
     if (f->id <= 7) g_cfg.acsi_id = f->id;
@@ -86,6 +90,7 @@ void cfg_save(void)
     const void *net = net_settings_blob(&nlen);
     memset(page, 0xff, sizeof page);
     memcpy(page, &f, sizeof f);
+    memcpy(page + CFG_SYSF_OFFSET, &g_sysf, sizeof g_sysf);
     memcpy(page + CFG_NET_OFFSET, net, nlen);
     int r = flash_safe_execute(cfg_write_cb, page, 1000);
     if (r != PICO_OK) printf("!! settings not saved (%d)\n", r);
@@ -323,7 +328,9 @@ static void console(int ch)
         sleep_ms(100);                      /* a running command finishes */
         acsi_stage_invalidate();
         {
-            int n = sysfiles_sync(disk_seed, true);
+            bool kc;
+            int n = sysfiles_sync(disk_seed, true, &kc);
+            if (kc) cfg_save();
             if (n < 0) printf("!! restoring the system files failed\n");
             else printf("%d system file(s) restored or updated\n", n);
         }
@@ -444,10 +451,15 @@ int main(void)
     bool need_seed = !disk_seeded();
     bool full_seed = need_seed && !disk_same_layout();
     if (need_seed) disk_seed_write_part(full_seed);
-    /* new firmware: bring README.TXT / ACSITNFS.PRG on C: up to date, keep
-       the user's own files (a deleted system file is only restored with R) */
-    if (!full_seed && sysfiles_sync(disk_seed, false) > 0)
-        disk_changed(0);                    /* a running Atari has the old FAT cached */
+    /* new firmware: bring the system files on C: up to date and add new ones,
+       keep the user's own files (a system file the user deleted is only
+       restored with R) */
+    if (!full_seed) {
+        bool kc;
+        if (sysfiles_sync(disk_seed, false, &kc) > 0)
+            disk_changed(0);                /* a running Atari has the old FAT cached */
+        if (kc) cfg_save();
+    }
 
     bool was_connected = false;
     for (;;) {

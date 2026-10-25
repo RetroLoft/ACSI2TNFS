@@ -57,7 +57,7 @@ Connect the Pico to a PC and open its serial port in a terminal program (any spe
 | `H` | hide / show the adapter (see below) |
 | `K` | network clock on / off |
 | `M` | removable unit on / off: with **HDDRIVER** a full network or SD drive then starts afresh without a reset. Leave it off with **AHDI** (its folders would stay empty) |
-| `R` | put the system files back on C: (also new ones after a firmware update) |
+| `R` | put the system files back on C:, also ones you deleted |
 | `F` | write C: anew: **all your files on C: are lost** |
 | `B` | restart the Pico in BOOTSEL mode (for a firmware update) |
 | `v` | verbose: log every ACSI command |
@@ -84,8 +84,9 @@ it could not connect or Wi-Fi is not set up.
 ## System files on C:
 
 `README.TXT`, `ACSITNFS.PRG`, `ACSI_NET.STX`, `STINGINS.TOS` and `NETCLOCK.PRG` come
-with the firmware and are read-only. A new firmware updates them at start-up and keeps every other file on C:.
-A system file that was deleted, or one that is new in the firmware, comes on C: with `R`.
+with the firmware and are read-only. A new firmware updates them at start-up, adds system
+files that are new, and keeps every other file on C:. A system file you deleted stays away
+(the adapter remembers which ones it put on C:); `R` puts it back.
 
 ## Troubleshooting
 

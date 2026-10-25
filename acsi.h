@@ -193,7 +193,14 @@ extern volatile bool g_unit_attention;
 void disk_changed(int part);                /* bump + keep GEMDOS off until seen */
 
 /* system files on C: (sysfiles.c): number written, -1 on error */
-int sysfiles_sync(const uint8_t *image, bool restore_missing);
+/* the system files the firmware put on C: (kept in the settings sector): a
+   missing one that is in here was deleted on purpose, one that is not is new */
+#define SYSF_MAX   16
+#define SYSF_MAGIC 0x53595346u          /* "SYSF" */
+typedef struct { uint32_t magic; uint8_t n; char name[SYSF_MAX][11]; } sysf_known_t;
+extern sysf_known_t g_sysf;
+/* *known_changed: g_sysf changed, store it (cfg_save) */
+int sysfiles_sync(const uint8_t *image, bool restore_missing, bool *known_changed);
 /* core0 changed the flash disk: core1 must re-read its write block */
 void acsi_stage_invalidate(void);
 

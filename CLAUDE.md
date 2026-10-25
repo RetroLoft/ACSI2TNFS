@@ -30,7 +30,10 @@ first. The old `build/` folder (if present) is an RP2040 build: don't use it.
   `~/.pico-sdk/picotool/2.2.0-a4/picotool/`, `VASM=~/tmp_toolchain_build/vasm/vasmm68k_mot`,
   `m68k-atari-mint-gcc` in `/usr/bin`. The Pico's console is
   `/dev/serial/by-id/usb-Raspberry_Pi_Pico*` (ttyACM number changes after a reset).
-  Flash: console `B`, then `picotool load -x build-pico2w/acsi2tnfs.uf2`. In BOOTSEL
+  Two firmwares per build: `acsi2tnfs.uf2` (production) and `acsi2tnfs-dev.uf2` (`A2T_DEV`:
+  logic analyser `L`/`l`, /ACK cross-check, longer `W` timeline, `x`/`d`; 1024 instead of
+  2400 tree nodes). Flash: console `B`, then `picotool load -x build-pico2w/acsi2tnfs.uf2`
+  (or `-dev`). In BOOTSEL
   `picotool save -r 0x10100000 0x10200000` reads the flash disk (read-only check of C:).
 - **Laptop (Windows):** toolchain in `~/.pico-sdk`, ninja/cmake in `~/.espressif/tools`.
   Console `B`, copy the .uf2 to the RP2350 drive. Frank may have his own serial monitor
@@ -144,9 +147,9 @@ first. The old `build/` folder (if present) is an RP2040 build: don't use it.
 1. Test the v2 firmware on the TT (AHDI); on the Mega STE (HDDRIVER, `M` on) check that
    a full drive still starts afresh with the rule of 3 TEST UNIT READYs (ST with our
    driver, ST with AHDI and EmuTOS work on v2-cable, also STinG and the SD drive).
-2. More room per drive, so AHDI and EmuTOS (no media change: reset needed) seldom hit the
-   ceiling, e.g. after Show Info: first more nodes than 1024 shared (drop the debug
-   buffers, item 7), then more than 16 MB (bigger logical sectors, as AHDI does).
+2. More room per drive, phase B: more than 16 MB per drive (bigger logical sectors, as
+   AHDI does), so Show Info on a large server fits (Frank's LAN drive: 122 MB). Phase A
+   (two builds, one shared store of 2400 nodes in prod) is done.
 3. While core0 waits for NTP (server not answering), Atari reads of ready TNFS drives
    wait too: 3-6 s, HDDRIVER timed out once (Mega STE, 2026-10-25). net_sleep_ms only
    serves drives that are not ready.

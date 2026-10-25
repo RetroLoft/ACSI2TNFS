@@ -492,11 +492,9 @@ typedef struct {
     uint8_t  seq;
     uint8_t  gen;                   /* +1 at every new session (old handles dead) */
     unsigned vmaj, vmin;
-    /* tree: nodes root .. node_end-1 of vn[] (room up to node_limit), names
-       pool_start .. pool_end-1 of vpool[], cluster owners valloc[va0 .. va0+van-1] */
-    uint16_t root, node_end, node_limit;
-    uint32_t pool_start, pool_end, pool_limit;
-    uint16_t va0, van;
+    /* tree: node root of vn[] and the nodes with its drive number (all drives
+       share vn[] and vpool[]), cluster owners valloc[drive][0 .. van-1] */
+    uint16_t root, van;
     uint32_t next_cl;               /* clusters below are handed out         */
     uint64_t fseen;                 /* FAT sectors the Atari read since its reset */
     uint32_t root_cl;               /* next_cl after the root's own runs     */
@@ -1001,7 +999,10 @@ static uint32_t le32(const uint8_t *p) { return p[0] | (p[1] << 8) | (p[2] << 16
 #define V_DIRCL     8               /* a folder: 8 KB, 254 entries besides . and .. */
 #define V_DIRENT    (V_DIRCL * V_CLBYTES / 32 - 2)
 
-#define VNODES      1024
+/* files and folders of all drives together: the production build has the
+   room the dev build spends on its logic analyser and /ACK check */
+#define VNODES      (A2T_DEV ? 1024 : 2400)
+#define VPOOL       (A2T_DEV ? 32768 : 49152)   /* their long names */
 
 typedef struct {
     uint16_t parent;                /* the drive's root node: itself */
@@ -1010,6 +1011,7 @@ typedef struct {
     uint16_t start_cl;              /* start cluster as GEMDOS has it now    */
     uint8_t  isdir;
     uint8_t  flags;                 /* VF_*                                  */
+    uint8_t  drv;                   /* drive (vd[]) the node belongs to      */
     char     n83[11];
     uint32_t size, mtime;
     uint32_t name_off;
@@ -1030,9 +1032,21 @@ static uint8_t wbits[VDRIVES_MAX][(VFAT_SECTORS + 7) / 8];
 static uint8_t dbits[VDRIVES_MAX][(VFAT_SECTORS + 7) / 8];
 #define BIT(m, r)   ((m)[(r) >> 3] & (1u << ((r) & 7)))
 
+/* one store for the trees of all drives: a drive that is used much takes
+   what the others leave. Nodes and names are only handed out (vn_end,
+   vpool_end); every tree starts afresh together (vtrees_reset) */
 static vnode_t  vn[VNODES];
-static char     vpool[32768];       /* vpool[0] = "": the name of every root */
-static uint16_t valloc[VNODES];     /* nodes that own clusters, per drive in cluster order */
+static char     vpool[VPOOL];       /* vpool[0] = "": the name of every root */
+static uint16_t vn_end;
+static uint32_t vpool_end;
+static uint16_t valloc[VDRIVES_MAX][VNODES]; /* nodes that own clusters, in cluster order */
+
+static void vtrees_reset(void)
+{
+    vn_end = 0;
+    vpool[0] = 0;
+    vpool_end = 1;
+}
 
 static char *vname(uint16_t i) { return vpool + vn[i].name_off; }
 
@@ -1082,8 +1096,8 @@ static void make83(uint16_t d, const char *name, char out[11])
         }
         memcpy(out + 8, ext, (size_t)el);
         bool clash = false;
-        /* siblings so far; the node being named is the last one (node_end - 1) */
-        for (uint16_t k = vn[d].child_start; k + 1 < cur->node_end; k++)
+        /* siblings so far; the node being named is the last one (vn_end - 1) */
+        for (uint16_t k = vn[d].child_start; k + 1 < vn_end; k++)
             if (!memcmp(vn[k].n83, out, 11)) { clash = true; break; }
         if (!clash) return;
     }
@@ -1107,8 +1121,8 @@ static bool vscan_room(uint16_t d, const char *name)
 {
     vdrive_t *dr = cur;
     uint32_t max = d == dr->root ? V_ROOTENT - 1 : V_DIRENT;
-    if (dr->node_end < dr->node_limit && vn[d].child_count < max &&
-        dr->pool_end + strlen(name) + 1 <= dr->pool_limit) return true;
+    if (vn_end < VNODES && vn[d].child_count < max &&
+        vpool_end + strlen(name) + 1 <= sizeof vpool) return true;
     dr->skipped++;
     if (vn[d].child_count < max) dr->nospace++;    /* not just a folder too long */
     return false;
@@ -1119,16 +1133,17 @@ static void vscan_add(uint16_t d, const char *name, bool isdir, uint32_t size,
                       uint32_t mtime, bool ro)
 {
     vdrive_t *dr = cur;
-    uint16_t i = dr->node_end++;
+    uint16_t i = vn_end++;
     memset(&vn[i], 0, sizeof vn[i]);
     vn[i].parent = d;
+    vn[i].drv = (uint8_t)(dr - vd);
     vn[i].isdir = isdir;
     vn[i].flags = ro && !isdir ? VF_RO : 0;
     vn[i].size = isdir ? 0 : size;
     vn[i].mtime = mtime;
-    vn[i].name_off = dr->pool_end;
-    strcpy(vpool + dr->pool_end, name);
-    dr->pool_end += (uint32_t)strlen(name) + 1;
+    vn[i].name_off = vpool_end;
+    strcpy(vpool + vpool_end, name);
+    vpool_end += (uint32_t)strlen(name) + 1;
     make83(d, name, vn[i].n83);
     vn[d].child_count++;
     if (isdir) dr->dirs++; else dr->files++;
@@ -1253,7 +1268,7 @@ static bool vscan_dir(uint16_t d)
     static char path[256], child[320];      /* not reentrant: keep off the stack */
     vdrive_t *dr = cur;
     vpath(d, path, sizeof path);
-    vn[d].child_start = dr->node_end;
+    vn[d].child_start = vn_end;
     vn[d].child_count = 0;
     if (dr->sd) return vscan_sd(d, path);
     if (!dr->no_dirx && vscan_dirx(d, path)) return true;
@@ -1334,7 +1349,7 @@ static bool vdir_load(uint16_t dir)
         v->first_cl = v->start_cl = (uint16_t)c;
         v->ncl = (uint16_t)ncl;
         v->sig = run_sig(c, ncl);
-        if (ncl) valloc[d->va0 + d->van++] = i;
+        if (ncl) valloc[d - vd][d->van++] = i;
     }
     /* the clusters (16 MB, or the FAT the Atari has not read), the nodes or
        the names ran out: a fresh tree helps if other folders took the room
@@ -1347,7 +1362,7 @@ static bool vdir_load(uint16_t dir)
         vpath(dir, p, sizeof p);
         printf("net: %s %d: read %s: %u entries, clusters up to %lu, nodes %u/%u%s\n",
                d->sd ? "SD" : "TNFS", (int)(d - vd) + 1, p, vn[dir].child_count, (unsigned long)d->next_cl,
-               d->node_end - d->root, d->node_limit - d->root,
+               vn_end, VNODES,
                d->restart ? (g_mc_driver || TUR_DRIVER ? " (some skipped: no room left, starting afresh when idle)"
                                          : " (some skipped: no room left, reset the Atari)")
                : d->skipped != skipped0 ? " (some skipped)" : "");
@@ -1360,8 +1375,9 @@ static void tnfs_close(uint8_t h);
 static void fs_close(uint8_t h);
 static void tmp_close(vdrive_t *d);
 
-/* the current drive's tree from scratch: only the root (after mounting and
-   at every Atari reset); folders follow when the Atari reads them */
+/* the current drive's tree from scratch, after vtrees_reset: only the root
+   (after mounting, at every Atari reset, when a folder did not fit); folders
+   follow when the Atari reads them */
 static void vfat_scan(void)
 {
     vdrive_t *d = cur;
@@ -1370,14 +1386,13 @@ static void vfat_scan(void)
     tmp_close(d);
     d->tmp_used = d->wr_pending = false;
     d->files = d->dirs = d->skipped = 0;
-    uint16_t r = d->root;
-    d->node_end = r + 1;
-    d->pool_end = d->pool_start;
+    uint16_t r = d->root = vn_end++;    /* vtrees_reset first */
     d->van = 0;
     d->next_cl = 2;
     d->fseen = 0;
     memset(&vn[r], 0, sizeof vn[r]);
     vn[r].parent = r;
+    vn[r].drv = (uint8_t)(d - vd);
     vn[r].isdir = 1;
     vn[r].name_off = 0;                                     /* vpool[0] = "" */
     vdir_load(r);
@@ -1391,16 +1406,35 @@ static void vfat_scan(void)
     d->ready = true;
 }
 
+/* every drive that can be reached: its tree afresh from the root (at an
+   Atari reset, or when a folder did not fit) */
+static void vtrees_restart(void)
+{
+    bool up[VDRIVES_MAX];
+    for (int i = 0; i < nvd; i++) {         /* not ready meanwhile: their old */
+        up[i] = vd[i].ready;                /* nodes are gone */
+        vd[i].ready = false;
+    }
+    vtrees_reset();
+    for (int i = 0; i < nvd; i++) {
+        if (!up[i]) continue;
+        cur = &vd[i];
+        vfat_scan();
+    }
+    cur = NULL;
+}
+
 /* node of the current drive owning cluster c, or -1 */
 static int vfind(uint32_t c)
 {
-    int lo = cur->va0, hi = (int)cur->va0 + cur->van - 1;
+    const uint16_t *va = valloc[cur - vd];
+    int lo = 0, hi = (int)cur->van - 1;
     while (lo <= hi) {
         int mid = (lo + hi) / 2;
-        const vnode_t *v = &vn[valloc[mid]];
+        const vnode_t *v = &vn[va[mid]];
         if (c < v->first_cl) hi = mid - 1;
         else if (c >= (uint32_t)v->first_cl + v->ncl) lo = mid + 1;
-        else return valloc[mid];
+        else return va[mid];
     }
     return -1;
 }
@@ -1981,10 +2015,10 @@ static bool vnode_place(uint16_t i, uint16_t dir, const char *n83)
     char name[13];
     n83_str(n83, name);
     size_t l = strlen(name) + 1;
-    if (d->pool_end + l > d->pool_limit) return false;
-    memcpy(vpool + d->pool_end, name, l);
-    vn[i].name_off = d->pool_end;
-    d->pool_end += (uint32_t)l;
+    if (vpool_end + l > sizeof vpool) return false;
+    memcpy(vpool + vpool_end, name, l);
+    vn[i].name_off = vpool_end;
+    vpool_end += (uint32_t)l;
     memcpy(vn[i].n83, n83, 11);
     vn[i].parent = dir;
     return true;
@@ -1992,16 +2026,16 @@ static bool vnode_place(uint16_t i, uint16_t dir, const char *n83)
 
 static int vnode_new(uint16_t dir, const char *n83, bool isdir)
 {
-    vdrive_t *d = cur;
-    if (d->node_end >= d->node_limit) return -1;
-    uint16_t i = d->node_end;
+    if (vn_end >= VNODES) return -1;
+    uint16_t i = vn_end;
     memset(&vn[i], 0, sizeof vn[i]);
+    vn[i].drv = (uint8_t)(cur - vd);
     if (!vnode_place(i, dir, n83)) return -1;
     vn[i].isdir = isdir;
     vn[i].flags = isdir ? VF_LOADED : 0;                    /* new: nothing on the server */
     vn[i].start_cl = 0xffff;                                /* never synced */
     vn[i].size = 0xffffffffu;
-    d->node_end++;
+    vn_end++;
     return i;
 }
 
@@ -2065,13 +2099,14 @@ static void vsync_entry(uint16_t dir, const uint8_t *e, uint16_t *queue, int *nq
     int n = -1;
 
     /* same name in the same directory */
-    for (uint16_t i = d->root + 1; i < d->node_end && n < 0; i++)
-        if (!(vn[i].flags & (VF_DEL | VF_SEEN)) && vn[i].parent == dir &&
+    for (uint16_t i = d->root + 1; i < vn_end && n < 0; i++)
+        if (vn[i].drv == d - vd && !(vn[i].flags & (VF_DEL | VF_SEEN)) && vn[i].parent == dir &&
             vn[i].isdir == isdir && !memcmp(vn[i].n83, n83, 11))
             n = i;
     /* same start cluster under another name or in another directory */
-    for (uint16_t i = d->root + 1; i < d->node_end && n < 0 && valid_cl(c); i++)
-        if (!(vn[i].flags & (VF_DEL | VF_SEEN)) && vn[i].start_cl == c && vn[i].isdir == isdir) {
+    for (uint16_t i = d->root + 1; i < vn_end && n < 0 && valid_cl(c); i++)
+        if (vn[i].drv == d - vd && !(vn[i].flags & (VF_DEL | VF_SEEN)) && vn[i].start_cl == c &&
+            vn[i].isdir == isdir) {
             vpath(i, path, sizeof path);
             child_path(dir, n83, path2, sizeof path2);
             vfile_close();
@@ -2127,8 +2162,8 @@ static void vsync(void)
     d->wr_pending = false;                  /* writes from now on: next sync */
     fsec_rel = -1;
     /* nodes from here on are folders read while we sync (vreq_service) */
-    uint16_t end0 = d->node_end;
-    for (uint16_t i = d->root; i < end0; i++) vn[i].flags &= (uint8_t)~VF_SEEN;
+    uint16_t end0 = vn_end;
+    for (uint16_t i = d->root; i < end0; i++) if (vn[i].drv == k0) vn[i].flags &= (uint8_t)~VF_SEEN;
     vn[d->root].flags |= VF_SEEN;
     queue[nq++] = d->root;
     for (int qi = 0; qi < nq; qi++) {
@@ -2165,7 +2200,7 @@ static void vsync(void)
        ones (no clusters this session) GEMDOS never had. */
     for (int i = end0 - 1; i > d->root; i--) {
         vnode_t *v = &vn[i];
-        if (v->flags & (VF_SEEN | VF_DEL | VF_HIDE)) continue;
+        if (v->drv != k0 || (v->flags & (VF_SEEN | VF_DEL | VF_HIDE))) continue;
         vpath((uint16_t)i, path, sizeof path);
         vfile_close();
         bool ok = fs_path(v->isdir ? 0x14 : 0x26, path);
@@ -2203,7 +2238,8 @@ static void vdrive_up(int i)
     vdrive_t *d = &vd[i];
     d->dir[0] = 0;
     vfat_scan();
-    for (uint16_t k = d->root + 1; k < d->node_end; k++) {
+    for (uint16_t k = d->root + 1; k < vn_end; k++) {
+        if (vn[k].drv != i) continue;
         char p[256];
         vpath(k, p, sizeof p);
         printf("  %.8s.%.3s %s %8lu  cl %5u+%-4u %s\n", vn[k].n83, vn[k].n83 + 8,
@@ -2233,16 +2269,10 @@ static void vdrive_up(int i)
 static void tnfs_connect_and_scan(void)
 {
     drives_down();
-    vpool[0] = 0;
-    /* each drive a fixed part of the node table and name pool: they grow
-       whenever the Atari reads a folder */
+    vtrees_reset();                         /* every drive comes up anew below */
     for (int i = 0; i < nvd; i++) {
         vdrive_t *d = &vd[i];
-        d->root = d->node_end = d->va0 = (uint16_t)(i * VNODES / nvd);
-        d->node_limit = (uint16_t)((i + 1) * VNODES / nvd);
         d->van = 0;
-        d->pool_start = d->pool_end = 1 + (uint32_t)i * (sizeof vpool - 1) / (uint32_t)nvd;
-        d->pool_limit = 1 + (uint32_t)(i + 1) * (sizeof vpool - 1) / (uint32_t)nvd;
         d->failed = false;
         vdrive_wait(d);
     }
@@ -2328,33 +2358,35 @@ void net_poll(void)
         /* a fresh GEMDOS: first to the server what the Atari wrote, then
            every tree again from the root (the clusters start anew) */
         for (int i = 0; i < nvd; i++) {
-            if (!vd[i].ready) continue;
+            if (!vd[i].ready || !vd[i].wr_pending) continue;
             cur = &vd[i];
-            if (cur->wr_pending) vsync();
-            vfat_scan();
+            vsync();
             cur = NULL;
         }
+        vtrees_restart();
         atari_reset = false;
     }
     vreq_service();
     uint32_t now = to_ms_since_boot(get_absolute_time());
-    /* a folder did not fit (vdir_load): start the drive's tree afresh and
-       report a media change: to our driver through the change counters
-       (vendor sub 10), to HDDRIVER through UNIT ATTENTION at its next TEST
-       UNIT READY (console M, removable). Not otherwise (AHDI): GEMDOS would
-       keep its old FAT. Only after 2 s without reads or writes and with
-       everything synced, so no file read still runs on the old clusters. */
-    for (int i = 0; i < nvd && vreq_state != 1; i++) {
-        vdrive_t *d = &vd[i];
-        if (!d->restart || !d->ready || d->wr_pending || !(g_mc_driver || TUR_DRIVER) ||
-            now - d->last_req_ms < 2000)
-            continue;
-        cur = d;
-        vfat_scan();
-        cur = NULL;
-        disk_changed(1 + i);
+    /* a folder did not fit (vdir_load): start the trees afresh, all of them
+       (they share one store), and report a media change of every drive: to
+       our driver through the change counters (vendor sub 10), to HDDRIVER
+       through UNIT ATTENTION at its next TEST UNIT READY (console M,
+       removable). Not otherwise (AHDI, EmuTOS): GEMDOS would keep its old FAT.
+       Only once every drive has been 2 s without reads or writes and is
+       synced, so no file read still runs on the old clusters. */
+    bool want = false, idle = vreq_state != 1 && (g_mc_driver || TUR_DRIVER);
+    for (int i = 0; i < nvd; i++) {
+        const vdrive_t *d = &vd[i];
+        if (!d->ready) continue;
+        if (d->restart) want = true;
+        if (d->wr_pending || now - d->last_req_ms < 2000) idle = false;
+    }
+    if (want && idle) {
+        vtrees_restart();
+        for (int i = 0; i < nvd; i++) if (vd[i].ready) disk_changed(1 + i);
         g_unit_attention = TUR_DRIVER;
-        printf("net: %s %d: tree started afresh, media change reported\n", d->sd ? "SD" : "TNFS", i + 1);
+        printf("net: trees started afresh, media change reported\n");
     }
     /* a second after the last write: bring the server in line */
     for (int i = 0; i < nvd && vreq_state != 1; i++)

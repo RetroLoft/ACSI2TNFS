@@ -360,3 +360,17 @@ De firmware kent alleen nog de pinmap van v2/v2-cable; alles van de dev-print en
 - Schrijven: MAGIC.RAM (246.232 bytes) van de LAN-drive naar C: en terug naar de server (`sync: write /OLD/MAGIC.RA, 246232 bytes ok`), 39 WRITE-opdrachten zonder fout.
 - Gevonden en opgelost: grote leesopdrachten misten ~160 /ACK-samples in de controle (de data zelf was goed). Oorzaak: het lezen van de BOOTSEL-knop elke 100 ms hield core1 ~150 µs stil (`flash_safe_execute`); bij TNFS-drives steeds rond byte 158 (de controle was na de lange TNFS-aanvraag achterstallig), bij C: op willekeurige plekken. Zonder BOOTSEL-uitlezing: 0 mismatches in 339 controles.
 - Bij een druk op de knop slaat de Pico de instelling op in flash; een vendor-commando van de driver dat op dat moment binnenkwam viel weg (PROTOCOL), de driver probeert opnieuw.
+
+## Meer ruimte per drive, fase A: twee builds en een gedeelde voorraad (25 oktober 2026)
+
+Aanleiding: Show Info opent elke map van een drive. De LAN-drive is 1573 bestanden en 273 mappen, 122 MB; per drive waren er 341 knooppunten (1024 in drie vaste delen) en 16 MB. AHDI en EmuTOS horen niets van een mediawissel en hebben dan een reset nodig.
+
+- **Twee builds** uit dezelfde bronnen (CMake-functie, vlag `A2T_DEV`): `acsi2tnfs.uf2` (prod) en `acsi2tnfs-dev.uf2` (dev: logic analyser 16 KB op `L`/`l`, /ACK-controle van leesopdrachten, langere STinG-tijdlijn `W`, sectordumps `x`/`d`). De ongebruikte `rxcopy` is weg.
+- **Gedeelde voorraad:** knooppunten, namen en clusterbezitters van alle drives in één voorraad (`vn_end`, `vpool_end`, per knooppunt het drivenummer); prod 2400 knooppunten en 48 KB namen, dev 1024 en 32 KB. Alle bomen beginnen samen opnieuw (`vtrees_restart`): bij een Atari-reset, en bij een vol plafond pas als elke drive 2 s rust heeft en gesynchroniseerd is; elke drive meldt dan een mediawissel. RAM vrij: prod ~42 KB, dev ~50 KB.
+
+**Testverslag (v2-cable, ST, prod-build)**
+
+- TOS 1.04 met onze driver: mappen op LAN-, SD- en retroloft-drive; Show Info op de LAN-drive: nu stopt hij op de 16 MB (`clusters up to 16301`, `nodes 378/2400`), tot 785 knooppunten gebruikt; daarna `trees started afresh, media change reported`, geen lege mappen.
+- Schrijven LAN-drive: `write /ACSITNFS.PRG, 158161 bytes`, `rename`, `delete`, `mkdir /NEWMAP`, alle ok. SD-drive: map CRYSTALC met 4 bestanden, ok.
+- EmuTOS: na Show Info lege mappen tot een reset, zoals bedoeld.
+- Fase B (meer dan 16 MB per drive, grotere logische sectoren) is nodig om Show Info op de LAN-drive helemaal te laten passen.

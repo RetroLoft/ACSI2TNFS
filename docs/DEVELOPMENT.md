@@ -6,8 +6,14 @@
 
 ```text
 cmake -G Ninja -B build-pico2w -DPICO_BOARD=pico2_w
-ninja -C build-pico2w            # build-pico2w/acsi2tnfs.uf2
+ninja -C build-pico2w            # build-pico2w/acsi2tnfs.uf2 and acsi2tnfs-dev.uf2
 ```
+
+Every build makes two firmwares from the same sources: `acsi2tnfs.uf2` (production) and
+`acsi2tnfs-dev.uf2` (`A2T_DEV`: a PIO logic analyser on console `L`/`l`, the /ACK cross-check
+of reads, a longer STinG frame timeline `W` and sector dumps `x`/`d`). The production
+build spends that RAM on the trees of the network and SD drives (2400 files and folders
+instead of 1024).
 
 The version number lives in `version.txt` only. CMake passes it to the firmware, and
 `ninja` runs `atari/mkdisk.py` whenever `version.txt`, an Atari source or a file in
@@ -39,7 +45,7 @@ everything there becomes a read-only system file on C:.
 |---|---|
 | `acsi2tnfs.c` | core0: USB console, sniffer decoder, settings, disk seeding |
 | `acsi_core1.c` | core1: real-time ACSI target, flash disk, command dispatch |
-| `acsi_bus.pio` | PIO programs: /CS and /ACK capture, DMA in/out, logic analyser |
+| `acsi_bus.pio` | PIO programs: /CS and /ACK capture, DMA in/out, logic analyser (dev build) |
 | `net.c` | Wi-Fi, NTP clock, TNFS drives (virtual FAT, writing and sync) |
 | `netbridge.c` | network function for STinG: frame bridge between ACSI and Wi-Fi |
 | `config.c` | configuration protocol for ACSITNFS.PRG |
@@ -79,9 +85,9 @@ design of the network function, with the reasoning and the test reports, is in
 - **NETTEST.TTP** (`atari/tools`): finds the adapter, `NET_INFO`, short DMA read test
   (`S`), bridge tests with ARP (`A`, `L`), read test of C: and a network drive (`R`).
   Writes everything also to `NETTEST.LOG` in its folder.
-- **USB console:** `v` logs every command with a byte-by-byte /ACK cross-check on reads;
-  `L`/`l` arm and dump the built-in PIO logic analyser (16 ns); `s` is a passive ACSI
-  bus monitor (sniffer).
+- **USB console:** `v` logs every command; the dev build adds a byte-by-byte /ACK
+  cross-check on reads and `L`/`l` to arm and dump the PIO logic analyser (16 ns); `s` is
+  a passive ACSI bus monitor (sniffer).
 
 ## Hardware notes
 

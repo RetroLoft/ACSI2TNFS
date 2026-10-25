@@ -74,7 +74,7 @@ static uint32_t get32(const uint8_t *p) { return get16(p) << 16 | get16(p + 2); 
    one ring per core, so each has a single writer */
 enum { TR_RX_IN, TR_RX_OUT, TR_TX_IN, TR_TX_OUT };
 typedef struct { uint32_t t; uint32_t val; uint16_t len; uint8_t type, flags; } trace_t;
-#define TR_N 256
+#define TR_N (A2T_DEV ? 256 : 16)          /* dev build: a longer timeline */
 static trace_t tr0[TR_N], tr1[TR_N];        /* core0: Wi-Fi side, core1: ACSI side */
 static volatile uint32_t tr0_n, tr1_n;
 

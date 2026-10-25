@@ -42,6 +42,8 @@ static inline uint32_t smp_norm(uint32_t s)
     return rev8((uint8_t)s) | ((s >> 2) & 0x1f00);
 }
 
+#define LA_WORDS 4096   /* dev build: logic analyser samples (16 ns each)    */
+
 /* bits in a normalised sample */
 #define S_DATA(s)   ((uint8_t)((s) & 0xff))
 #define S_CS        (1u << 8)

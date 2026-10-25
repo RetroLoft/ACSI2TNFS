@@ -54,7 +54,7 @@ static uint8_t cmd_log_idx;
 /* ---------------------------------------------------------------------------
    Event ring (single producer core1, single consumer core0)
 --------------------------------------------------------------------------- */
-#define EV_N 4096
+#define EV_N (A2T_DEV ? 4096 : 1024)
 static acsi_event_t ev_buf[EV_N];
 static volatile uint32_t ev_head, ev_tail;
 static uint32_t ev_dropped;
@@ -156,9 +156,11 @@ static void __not_in_flash_func(sm_stop)(uint sm)
 }
 
 /* /ACK samples = the bytes the Atari actually latched */
+#if A2T_DEV                      /* dev build: the /ACK cross-check of reads */
 static uint8_t  ackcap[33280];   /* one 64-sector transfer + extra strobes; raw
                                     pins GP6..GP13 (D7..D0): rev8() when compared */
 static uint32_t ackcap_n;
+#endif
 static const uint8_t *exp_a, *exp_b;  /* DMA-out stream of this command */
 static uint32_t exp_alen, exp_blen;
 static uint8_t exp_byte(uint32_t i)
@@ -174,7 +176,9 @@ static void __not_in_flash_func(ack_drain)(uint32_t *count)
         uint32_t v = pio->rxf[SM_ACK];
         if (count) {
             (*count)++;
+#if A2T_DEV
             if (ackcap_n < sizeof ackcap) ackcap[ackcap_n++] = (uint8_t)v;
+#endif
         }
     }
 }
@@ -227,15 +231,16 @@ static bool __not_in_flash_func(cs_wait)(uint32_t *s, uint32_t timeout_us)
  * the bus); a gap between sectors would instead hand the Atari stale bytes
  * and shift the rest of the data.
  */
-static int dch_a = -1, dch_b = -1, dch_la = -1;
+static int dch_a = -1, dch_b = -1;
 
 /* DMA ends of the data state machines: byte 3 of the FIFO word, where
    acsi_dout and acsi_din reverse the bits (acsi_bus.pio) */
 #define DOUT_TXF ((volatile uint8_t *)&pio->txf[SM_DOUT] + 3)
 #define DIN_RXF  ((volatile uint8_t *)&pio->rxf[SM_DIN] + 3)
 
+#if A2T_DEV
 /* logic analyser on PIO1: armed from the console, fires at the next write */
-#define LA_WORDS 8192
+static int dch_la = -1;
 uint32_t la_buf[LA_WORDS];
 volatile bool la_armed, la_done;
 static uint off_la;
@@ -255,6 +260,7 @@ static void la_start(void)
     dma_channel_configure(dch_la, &c, la_buf, &p1->rxf[0], LA_WORDS, true);
     pio_sm_set_enabled(p1, 0, true);
 }
+#endif
 
 static bool __not_in_flash_func(dma_out2)(const uint8_t *a, uint32_t alen,
                                           const uint8_t *b, uint32_t blen)
@@ -313,11 +319,8 @@ static bool dma_out(const uint8_t *buf, uint32_t len)
 }
 
 /* DMA: Atari -> device. The DIN state machine must already be running. */
-/* copy of everything received in this command, for the /ACK cross-check */
-static uint8_t  rxcopy[4608];
 #define WBUF_SECTORS 256                    /* READ(6)/WRITE(6) maximum: EmuTOS asks 255 */
 static uint8_t  wbuf[WBUF_SECTORS * 512];   /* one complete transfer */
-static uint32_t rx_n;
 
 
 /* Status phase: put status on the bus, raise /IRQ, wait for the /CS read. */
@@ -475,7 +478,9 @@ static uint8_t read_sectors(uint32_t lba, uint32_t n)
  */
 static bool dma_in(uint8_t *buf, uint32_t len)
 {
+#if A2T_DEV
     if (la_armed) { la_armed = false; la_start(); la_done = true; }
+#endif
     pio_sm_set_enabled(pio, SM_DIN, false);
     pio_sm_clear_fifos(pio, SM_DIN);
     dma_channel_config c = dma_channel_get_default_config(dch_a);
@@ -500,8 +505,6 @@ static bool dma_in(uint8_t *buf, uint32_t len)
     ack_drain(&acks);
     if (!ok) dma_channel_abort(dch_a);
     sm_stop(SM_DIN);
-    rx_n = len < sizeof rxcopy ? len : sizeof rxcopy;
-    memcpy(rxcopy, buf, rx_n);
     return ok;
 }
 
@@ -798,10 +801,11 @@ static void __not_in_flash_func(handle_command)(uint32_t s0)
     }
     acks = 0;
     ack_drain(NULL);
+#if A2T_DEV
     ackcap_n = 0;
+#endif
     exp_a = exp_b = NULL;
     exp_alen = exp_blen = 0;
-    rx_n = 0;
     res = RES_OK;
     L.status = exec_cmd(L.cdb, len, &L.bytes);
     /* No /ACK cross-check for writes: the CPU-drained sampler misses strobes
@@ -809,8 +813,9 @@ static void __not_in_flash_func(handle_command)(uint32_t s0)
        reading the flash back instead ('x'). */
     L.result = res;
     L.acks = acks;
-    L.cap_n = (uint16_t)ackcap_n;
     L.mism = 0xffff;
+#if A2T_DEV
+    L.cap_n = (uint16_t)ackcap_n;
     if (exp_a) {
         uint32_t tot = exp_alen + exp_blen;
         uint32_t m = tot < ackcap_n ? tot : ackcap_n;
@@ -822,6 +827,7 @@ static void __not_in_flash_func(handle_command)(uint32_t s0)
             L.exp[i] = exp_byte(b + i);
         }
     }
+#endif
     if (res == RES_RESET) goto done;
     if (res != RES_OK) L.status = 0x02;
     if (L.status && L.status != 0x08) {     /* BUSY (NET_TX ring full) is no error */
@@ -958,7 +964,9 @@ void acsi_hw_init(void)
     /* claim our state machines so the Wi-Fi driver (CYW43 uses a PIO SM for
        its SPI bus) picks a different one */
     for (uint sm = 0; sm < 4; sm++) pio_sm_claim(pio, sm);
-    pio_sm_claim(pio1, 0);
+#if A2T_DEV
+    pio_sm_claim(pio1, 0);                  /* logic analyser */
+#endif
 
     off_cs   = pio_add_program(pio, &acsi_cs_program);
     off_ack  = pio_add_program(pio, &acsi_ack_program);
@@ -1012,6 +1020,7 @@ void acsi_hw_init(void)
 
     dch_a = dma_claim_unused_channel(true);
     dch_b = dma_claim_unused_channel(true);
+#if A2T_DEV
     dch_la = dma_claim_unused_channel(true);
     off_la = pio_add_program(pio1, &acsi_la_program);
     pio_sm_config lc = acsi_la_program_get_default_config(off_la);
@@ -1020,6 +1029,7 @@ void acsi_hw_init(void)
     sm_config_set_fifo_join(&lc, PIO_FIFO_JOIN_RX);
     sm_config_set_clkdiv(&lc, 2.0f);           /* 62.5 MHz = 16 ns per sample */
     pio_sm_init(pio1, 0, off_la, &lc);
+#endif
 
     /* NOTE: do not bypass the input synchroniser on /ACK: tried, the PIO
        then also sees ringing on the cable as extra edges and skips bytes */

@@ -22,9 +22,10 @@
 #include "acsi.h"
 #include "disk_seed.h"
 
+#if A2T_DEV
 extern uint32_t la_buf[];
 extern volatile bool la_armed, la_done;
-#define LA_WORDS 8192
+#endif
 
 /* defaults for a new adapter (nothing in flash yet): hard disk on ACSI id 6.
    Not 0: an internal Mega ST disk, a Megafile or an UltraSatan usually sits
@@ -339,6 +340,7 @@ static void console(int ch)
         disk_changed(0);
         printf("C: changed: the driver reports a media change to GEMDOS\n");
         break;
+#if A2T_DEV                             /* dev build: logic analyser, sector dumps */
     case 'L': la_done = false; la_armed = true; printf("logic analyser armed (next WRITE)\n"); break;
     case 'l': {
         if (!la_done) { printf("no capture\n"); break; }
@@ -385,6 +387,7 @@ static void console(int ch)
         }
         break;
     }
+#endif
     case 'c': sd_console_test(); break;
     case 'o': {
         /* /OE and DIR of U1 as after a reset or in BOOTSEL: input with the

@@ -178,8 +178,8 @@ The time zone is a fixed offset from UTC: change it by hand for summer time.
 - **The room per drive can run out**, and folders then show up empty: see
   [Empty folders on a network or SD drive](#empty-folders-on-a-network-or-sd-drive).
 - **Number of files:** at most 511 entries in the root of a drive and 254 in a folder;
-  and about 1000 files and folders in all the folders the Atari has opened since its
-  reset, shared evenly by the drives (with three drives about 340 each).
+  and about 2400 files and folders in all the folders the Atari has opened since its
+  reset, shared by the drives (a drive that is used much takes what the others leave).
 - **Changes on the server or the card** made by others (a PC) are seen after the Atari
   reads that folder again: after an Atari reset, or console `N`. Changes made by the
   Atari itself are seen at once.
@@ -204,7 +204,7 @@ place stays reserved until the drive starts afresh. The room for one session is 
 
 - **16 MB of file space** per drive: every file in every folder you opened counts,
   whether you use it or not;
-- **about 340 files and folders** per drive (1000 shared by three drives);
+- **about 2400 files and folders**, shared by all network and SD drives;
 - **only the part of the FAT that TOS has not read yet:** TOS keeps the FAT sectors it
   has read in memory, so the adapter cannot add new files there.
 

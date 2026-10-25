@@ -1,4 +1,8 @@
-# ACSI2TNFS firmware - Raspberry Pi Pico (RP2040, non-W)
+# ACSI2TNFS firmware - Raspberry Pi Pico 2 W
+#
+# Two builds from the same sources:
+#   acsi2tnfs.uf2      production: the most room for the network and SD drives
+#   acsi2tnfs-dev.uf2  development: logic analyser, /ACK cross-check, traces (A2T_DEV)
 
 cmake_minimum_required(VERSION 3.13)
 
@@ -48,42 +52,49 @@ add_custom_command(
     VERBATIM)
 add_custom_target(atari_disk DEPENDS ${CMAKE_CURRENT_LIST_DIR}/disk_seed.h)
 
-add_executable(acsi2tnfs acsi2tnfs.c acsi_core1.c net.c config.c sysfiles.c netbridge.c sdcard.c
-    third_party/fatfs/ff.c third_party/fatfs/ffunicode.c)
-add_dependencies(acsi2tnfs atari_disk)
+function(acsi2tnfs_target name dev)
+    add_executable(${name} acsi2tnfs.c acsi_core1.c net.c config.c sysfiles.c netbridge.c sdcard.c
+        third_party/fatfs/ff.c third_party/fatfs/ffunicode.c)
+    add_dependencies(${name} atari_disk)
 
-# Wi-Fi boards (pico_w, pico2_w): lwIP + CYW43, background mode on core0
-if (PICO_CYW43_SUPPORTED)
-    target_link_libraries(acsi2tnfs pico_cyw43_arch_lwip_threadsafe_background)
-endif()
+    # Wi-Fi boards (pico_w, pico2_w): lwIP + CYW43, background mode on core0
+    if (PICO_CYW43_SUPPORTED)
+        target_link_libraries(${name} pico_cyw43_arch_lwip_threadsafe_background)
+    endif()
 
-pico_generate_pio_header(acsi2tnfs ${CMAKE_CURRENT_LIST_DIR}/acsi_bus.pio)
+    pico_generate_pio_header(${name} ${CMAKE_CURRENT_LIST_DIR}/acsi_bus.pio
+        OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/${name}-pio)
 
-target_compile_definitions(acsi2tnfs PRIVATE
-    PICO_STDIO_USB_ENABLE_RESET_VIA_BAUD_RATE=1
-    PICO_STDIO_USB_ENABLE_RESET_VIA_VENDOR_INTERFACE=1
-    PICO_STDIO_USB_CONNECT_WAIT_TIMEOUT_MS=0
-    PICO_STACK_SIZE=0x1000
-    FW_VERSION_STR="${ACSI2TNFS_VERSION}"
-)
+    target_compile_definitions(${name} PRIVATE
+        PICO_STDIO_USB_ENABLE_RESET_VIA_BAUD_RATE=1
+        PICO_STDIO_USB_ENABLE_RESET_VIA_VENDOR_INTERFACE=1
+        PICO_STDIO_USB_CONNECT_WAIT_TIMEOUT_MS=0
+        PICO_STACK_SIZE=0x1000
+        FW_VERSION_STR="${ACSI2TNFS_VERSION}"
+        A2T_DEV=${dev}
+    )
 
-pico_set_program_name(acsi2tnfs "acsi2tnfs")
-pico_set_program_version(acsi2tnfs "${ACSI2TNFS_VERSION}")
+    pico_set_program_name(${name} "${name}")
+    pico_set_program_version(${name} "${ACSI2TNFS_VERSION}")
 
-pico_enable_stdio_uart(acsi2tnfs 0)
-pico_enable_stdio_usb(acsi2tnfs 1)
+    pico_enable_stdio_uart(${name} 0)
+    pico_enable_stdio_usb(${name} 1)
 
-target_link_libraries(acsi2tnfs
-    pico_stdlib
-    pico_rand
-    pico_multicore
-    pico_flash
-    hardware_pio
-    hardware_flash
-    hardware_dma
-    hardware_spi
-)
+    target_link_libraries(${name}
+        pico_stdlib
+        pico_rand
+        pico_multicore
+        pico_flash
+        hardware_pio
+        hardware_flash
+        hardware_dma
+        hardware_spi
+    )
 
-target_include_directories(acsi2tnfs PRIVATE ${CMAKE_CURRENT_LIST_DIR})
+    target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_LIST_DIR})
 
-pico_add_extra_outputs(acsi2tnfs)
+    pico_add_extra_outputs(${name})
+endfunction()
+
+acsi2tnfs_target(acsi2tnfs 0)
+acsi2tnfs_target(acsi2tnfs-dev 1)

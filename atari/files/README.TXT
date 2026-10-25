@@ -112,6 +112,7 @@ USB console of the Pico (any baud rate, it is USB)
 The button on the board: a short press hides or shows the
 adapter (like H). Reset the Atari after pressing it.
 Leds: D1 flashes on disk activity; D2 is on, and blinks while
-the adapter is hidden.
+the adapter is hidden. The Pico's own led: Wi-Fi connecting
+(blinks), connected (on), no Wi-Fi (off).
 
 More: github.com/RetroLoft/ACSI2TNFS

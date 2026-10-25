@@ -355,6 +355,20 @@ bool net_link_up(void)
     return wifi_inited && cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA) == CYW43_LINK_UP;
 }
 
+/* the Pico's own led (on the Wi-Fi chip, so only once that has started):
+   blinks while connecting, on when connected, off when it could not connect */
+enum { WLED_OFF, WLED_BLINK, WLED_ON };
+static uint8_t wifi_led_mode;
+
+static void wifi_led_update(void)
+{
+    static int shown = -1;
+    if (!wifi_inited) return;
+    if (wifi_led_mode == WLED_ON && !net_link_up()) wifi_led_mode = WLED_OFF;   /* link lost */
+    int on = wifi_led_mode == WLED_ON || (wifi_led_mode == WLED_BLINK && (time_us_32() / 250000) % 2);
+    if (on != shown) { shown = on; cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, on); }
+}
+
 /* ---------------- Wi-Fi ---------------- */
 
 static bool wifi_connect(void)
@@ -374,8 +388,11 @@ static bool wifi_connect(void)
         cyw43_arch_enable_sta_mode();
         wifi_inited = true;
     }
-    if (cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA) == CYW43_LINK_UP)
+    if (cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA) == CYW43_LINK_UP) {
+        wifi_led_mode = WLED_ON;
         return true;
+    }
+    wifi_led_mode = WLED_BLINK;
 
     /* SideTNFS auth_mode mapping: 0 open, 1-2 WPA TKIP, 3-5 WPA2 AES, 6-8 mixed */
     static const uint32_t auth_map[9] = {
@@ -389,6 +406,8 @@ static bool wifi_connect(void)
                  g_net.ssid, attempt);
         if (cyw43_arch_wifi_connect_async(g_net.ssid, g_net.pass[0] ? g_net.pass : NULL, auth)) {
             snprintf(wifi_status, sizeof wifi_status, "connect call FAILED");
+            wifi_led_mode = WLED_OFF;
+            wifi_led_update();
             return false;
         }
         absolute_time_t until = make_timeout_time_ms(20000);
@@ -425,6 +444,8 @@ static bool wifi_connect(void)
         /* a wrong password will not get better by retrying */
         if (attempt >= 3 || !strcmp(err, "wrong password")) {
             snprintf(wifi_status, sizeof wifi_status, "'%s': %s", g_net.ssid, err);
+            wifi_led_mode = WLED_OFF;
+            wifi_led_update();
             return false;
         }
         cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);
@@ -439,6 +460,8 @@ static bool wifi_connect(void)
     cyw43_arch_lwip_end();
     const ip4_addr_t *ip = netif_ip4_addr(netif_default);
     snprintf(wifi_status, sizeof wifi_status, "connected, IP %s", ip4addr_ntoa(ip));
+    wifi_led_mode = WLED_ON;
+    wifi_led_update();
     printf("net: [%lu ms] Wi-Fi %s\n", (unsigned long)(time_us_64() / 1000), wifi_status);
     return true;
 }
@@ -1873,6 +1896,7 @@ static void net_sleep_ms(uint32_t ms)
     do {
         if (vreq_state == 1 && (vreq_drive >= (uint32_t)nvd || !vd[vreq_drive].ready))
             vreq_service();
+        wifi_led_update();
         sleep_ms(1);
     } while (!time_reached(until));
 }
@@ -2265,6 +2289,7 @@ void net_init(void)
 void net_poll(void)
 {
     net_bridge_publish();                           /* Wi-Fi state for NET_INFO */
+    wifi_led_update();
     if (g_set.rtc_enabled && !test_req && net_link_up() && (clk_sync_now || time_reached(ntp_next))) {
         clk_sync_now = false;
         bool ok = ntp_sync();

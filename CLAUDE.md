@@ -51,7 +51,7 @@ first. The old `build/` folder (if present) is an RP2040 build: don't use it.
   (type, size, partitions), `o` /OE pull-up test (U1 as after a reset). A short press on
   the board's button (GP26) also toggles hidden mode. Leds: D1 (GP0) disk activity, on
   1 s after the last READ/WRITE; D2 (GP28) on, blinking while hidden; the Pico's own led
-  is not used. Not the BOOTSEL button: reading it
+  (on the Wi-Fi chip) blinks while Wi-Fi connects, on when connected, off otherwise. Not the BOOTSEL button: reading it
   needs flash_safe_execute, which held core1 off ~150 us every 100 ms (the /ACK check of
   big reads then missed ~160 strobes; the data itself was fine).
 

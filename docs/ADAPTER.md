@@ -77,6 +77,8 @@ change counts from the next Atari reset: press the button, reset the Atari, and 
 on the floppy starts by itself.
 
 The other led (D1) flashes when the Atari reads or writes, like the led of a hard disk.
+The Pico's own led shows Wi-Fi: blinking while it connects, on when connected, off when
+it could not connect or Wi-Fi is not set up.
 
 ## System files on C:
 

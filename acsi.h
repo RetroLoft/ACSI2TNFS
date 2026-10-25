@@ -232,5 +232,6 @@ void net_bridge_console(void);                /* core0: 'w' command           */
 void net_bridge_trace(void);                  /* core0: 'W' frame timeline    */
 void core1_main(void);
 void sd_console_test(void);                   /* core0: console 'c' (sdcard.c) */
+bool sd_card_present(void);                   /* core0: the card detect switch */
 void cfg_save(void);
 const char *scsi_opname(uint8_t op);

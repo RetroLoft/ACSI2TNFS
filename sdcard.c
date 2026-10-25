@@ -17,6 +17,7 @@
 #define PIN_SD_MOSI 3
 #define PIN_SD_MISO 4
 #define PIN_SD_CS   5
+#define PIN_SD_CD   1                   /* card detect switch of the socket (to GND) */
 
 static bool sd_hc;                      /* SDHC/SDXC: block addresses, else bytes */
 
@@ -153,11 +154,26 @@ static bool sd_reg(uint8_t c, uint8_t *reg16)
 
 static uint32_t le32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
 
+/* the card detect switch of the socket: GP1, internal pull-up */
+bool sd_card_present(void)
+{
+    static bool init;
+    if (!init) {
+        gpio_init(PIN_SD_CD);
+        gpio_pull_up(PIN_SD_CD);
+        init = true;
+        busy_wait_us_32(10);
+    }
+    return !gpio_get(PIN_SD_CD);        /* untested: the switch closes to GND with a card in */
+}
+
 /* console 'c': what is in the slot */
 void sd_console_test(void)
 {
     static uint8_t b[512];
     const char *why = "";
+    sd_card_present();
+    printf("card detect (GP1): %s\n", gpio_get(PIN_SD_CD) ? "high" : "low");
     if (!sd_init(&why)) { printf("SD card: %s\n", why); return; }
     printf("SD card: %s, SPI at %lu kHz\n", sd_hc ? "SDHC/SDXC" : "SDSC",
            (unsigned long)(spi_get_baudrate(SD_SPI) / 1000));

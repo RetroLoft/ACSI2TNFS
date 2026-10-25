@@ -392,3 +392,10 @@ Probleem (Mega STE, HDDRIVER): antwoordde de tijdserver niet, dan wachtte `ntp_s
 Eerst kon `sysfiles_sync` niet zien of een ontbrekend systeembestand nieuw was of door de gebruiker gewist; een nieuw bestand kwam alleen met `R`. Nu houdt de settings-sector (offset 64, `g_sysf`) bij welke systeembestanden de firmware op C: zette. Bij het opstarten: veranderd bijwerken, ontbrekend en bekend overslaan (bewust gewist), ontbrekend en onbekend toevoegen. De lijst wordt alleen opgeslagen als hij verandert. Bij de overstap is er nog geen lijst: wat dan ontbreekt, komt één keer terug.
 
 **Test (v2-cable, controle met `picotool save` in BOOTSEL):** gewone firmware: lijst met de 5 bestanden, C: ongewijzigd. Testfirmware met een extra `TESTNEW.TXT`: toegevoegd (read-only), lijst 6. Herstart zonder flashen: C: en instellingen byte voor byte gelijk. TESTNEW.TXT op de Atari gewist, Pico herstart: blijft weg. Gewone firmware terug: lijst weer 5.
+
+## SD-kaart wisselen terwijl de Atari draait (25 oktober 2026, nog niet getest)
+
+De TF-01A heeft een mechanisch card-detect-contact (pin 9, op GP1). Gangbaar: open zonder kaart, dicht naar massa met een kaart erin; met de interne pull-up dus laag = kaart erin. Niet te testen op Franks v2-cable: daar zit nog een SD-breakoutboard zonder schakelaar, GP1 blijft hoog (console `c` toont de stand).
+
+- Alleen veranderingen tellen (een halve seconde stabiel): of er bij het opstarten een kaart is, bepaalt het aankoppelen zelf. Zo werkt een board zonder schakelaar gewoon.
+- Bij een verandering: wat nog naar de server of de kaart moet, eerst wegschrijven (bij uithalen niet meer wat op de kaart wachtte: melding), dan hetzelfde als console `N`. Elke drive die opkomt meldt een mediawissel; voor HDDRIVER met `M` ook UNIT ATTENTION (ook na `N`).

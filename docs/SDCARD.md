@@ -33,8 +33,12 @@ SD drives come up right after start-up, before Wi-Fi, and also work without Wi-F
   can run out during one session ([Empty folders](../README.md#empty-folders-on-a-network-or-sd-drive)).
 - **No card, or a card the adapter cannot read:** the drive holds one read-only file,
   `SD_ERR.TXT`, with the reason.
-- **Changing the card while the Atari runs:** after putting a card back, press `N` on
-  the USB console and reset the Atari. Best: switch off, change the card, switch on.
+- **Changing the card while the Atari runs:** a board with the card detect switch of the
+  socket (`v2`, `v2-cable` with the TF-01A socket) reads the drives again by itself when
+  a card goes in or out (not tested yet). With the adapter's own driver, and HDDRIVER
+  with console `M`, the Atari then sees the new card; with AHDI and EmuTOS reset the
+  Atari. Without the switch: press `N` on the USB console and reset the Atari. Take the
+  card out only when the adapter has written everything: a second after the last write.
 - **Changes made on a PC** are seen when the Atari reads the folder again: after an Atari
   reset.
 - **Hidden file `.A2T.TMP`** in the drive's folder: the adapter keeps the sectors the

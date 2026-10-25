@@ -2312,6 +2312,7 @@ static void vdrive_up(int i)
                  (unsigned long)d->files, (unsigned long)d->dirs, d->skipped ? " (some skipped)" : "");
     printf("net: %s %d %s\n", d->sd ? "SD" : "TNFS", i + 1, d->status);
     disk_changed(1 + i);                    /* new tree: GEMDOS must re-read */
+    g_unit_attention = TUR_DRIVER;          /* HDDRIVER with console M as well */
 }
 
 /* connect, mount and scan every drive: at start-up and by console N */
@@ -2386,6 +2387,36 @@ void net_init(void)
     for (int i = 0; i < nvd; i++) if (vd[i].sd) test_req = true;   /* SD drives: also without Wi-Fi */
 }
 
+/* the card detect switch of the socket (v2 boards): a card put in or taken
+   out, steady for 0.5 s, is handled like console N. Only changes count:
+   whether a card is there at start-up the mount itself finds out (a board
+   without the switch wired reads "no card" all the time) */
+static void sd_card_poll(uint32_t now)
+{
+    static uint32_t last;
+    static int shown = -1, cand = -1, same;
+    if (now - last < 100) return;
+    last = now;
+    int in = sd_card_present();
+    if (shown < 0) { shown = cand = in; return; }
+    if (in != cand) { cand = in; same = 0; return; }
+    if (in == shown || ++same < 5) return;
+    shown = in;
+    printf("net: SD card %s: drives read again\n", in ? "put in" : "taken out");
+    for (int i = 0; i < nvd; i++) {
+        vdrive_t *d = &vd[i];
+        if (!d->ready || !d->wr_pending) continue;
+        if (!in && (d->sd || d->tmp_sd)) {
+            printf("net: %s %d: writes not synced yet are lost with the card\n", d->sd ? "SD" : "TNFS", i + 1);
+            continue;
+        }
+        cur = d;
+        vsync();
+        cur = NULL;
+    }
+    test_req = true;
+}
+
 void net_poll(void)
 {
     net_bridge_publish();                           /* Wi-Fi state for NET_INFO */
@@ -2409,6 +2440,7 @@ void net_poll(void)
     }
     vreq_service();
     uint32_t now = to_ms_since_boot(get_absolute_time());
+    sd_card_poll(now);
     /* a folder did not fit (vdir_load): start the trees afresh, all of them
        (they share one store), and report a media change of every drive: to
        our driver through the change counters (vendor sub 10), to HDDRIVER

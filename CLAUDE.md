@@ -152,8 +152,9 @@ first. The old `build/` folder (if present) is an RP2040 build: don't use it.
 1. Test the v2 firmware on the TT (AHDI); on the Mega STE (HDDRIVER, `M` on) check that
    a full drive still starts afresh with the rule of 3 TEST UNIT READYs (ST with our
    driver, ST with AHDI and EmuTOS work on v2-cable, also STinG and the SD drive).
-2. SD card: still to test on a PC, with exFAT and without Wi-Fi; card swap while the
-   Atari runs (now: `N` and a reset; the socket has card detect on GP1).
+2. SD card: still to test on a PC, with exFAT and without Wi-Fi. Card detect (GP1, low =
+   card in, only changes count, then as console `N`) is untested: Frank's v2-cable still
+   has an SD breakout board without the switch.
 3. C: robustness: a CHKDSK-like console command.
 4. TNFS read cache; `pun_ptr` check next to AHDI/HDDRIVER.
 5. First release after the tests and the hardware.

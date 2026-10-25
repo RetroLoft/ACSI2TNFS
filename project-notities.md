@@ -399,3 +399,5 @@ De TF-01A heeft een mechanisch card-detect-contact (pin 9, op GP1). Gangbaar: op
 
 - Alleen veranderingen tellen (een halve seconde stabiel): of er bij het opstarten een kaart is, bepaalt het aankoppelen zelf. Zo werkt een board zonder schakelaar gewoon.
 - Bij een verandering: wat nog naar de server of de kaart moet, eerst wegschrijven (bij uithalen niet meer wat op de kaart wachtte: melding), dan hetzelfde als console `N`. Elke drive die opkomt meldt een mediawissel; voor HDDRIVER met `M` ook UNIT ATTENTION (ook na `N`).
+
+**SD-kaart, verder getest (25 oktober 2026, ST, TOS 1.04, onze driver):** de bestanden die de Atari op de kaart schreef, zijn op een pc in orde (Frank). Opstarten zonder wifi (SSID die niet bestaat): na drie pogingen "network not found" gaat alles door, de netwerkdrives tonen NET_ERR.TXT, de SD-drive werkt (mappen ingelezen). exFAT nog niet: geen kaart over.

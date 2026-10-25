@@ -227,6 +227,7 @@ files. The USB console (`n`, and the log) says "some skipped".
 | **The adapter's own driver** | after 2 seconds without disk activity the adapter starts the drive afresh and reports a media change; TOS reads the drive again | close the folder and open it again (TOS 2.06: or press Esc) |
 | **HDDRIVER** | the same, once console `M` is on: the adapter then reports itself as a removable unit, and HDDRIVER asks for media changes | press `M` on the USB console once (it is stored), then reset the Atari once. Without `M`: reset the Atari |
 | **AHDI** | nothing: AHDI does not hear of media changes | reset the Atari. **Leave `M` off:** with AHDI it makes TOS read the whole FAT again and again, and folders stay empty |
+| **EmuTOS** (its built-in driver) | nothing: EmuTOS does not hear of media changes | reset the Atari (`M` makes no difference) |
 
 A reset of the Atari always starts every drive afresh, with any driver. A single folder
 whose files together are larger than 16 MB always shows only part of its files.

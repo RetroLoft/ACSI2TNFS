@@ -102,6 +102,7 @@ Limitations of TNFS and SD drives
     - our own driver: wait 2 s, close and open the folder
     - HDDRIVER: the same after console M (once); else reset
     - AHDI: reset the Atari (leave M off with AHDI)
+    - EmuTOS: reset the Atari
   - At most 511 entries in the root and 254 in a folder.
   - Changes made on a PC are seen after an Atari reset.
   - The Atari writes sectors; about a second later the adapter

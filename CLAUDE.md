@@ -69,7 +69,8 @@ first. The old `build/` folder (if present) is an RP2040 build: don't use it.
 - **System files on C:** a firmware update replaces changed ones at start-up (before the
   console runs); a *new* one only comes with `R`. Don't interrupt a start-up: an erase cut
   off half-way once left FAT 2 empty (TOS reads FAT 2).
-- **Drive letters stop at P:** (TOS has 16 drives). TOS 1.0 does not see the adapter;
+- **Drive letters stop at P:** (TOS has 16 drives). EmuTOS on Frank's multi-TOS board
+  runs C:\AUTO only after a cold start (power off/on), not after a warm reset. TOS 1.0 does not see the adapter;
   TOS 1.02/1.04, 2.06, 3.06 and EmuTOS work (EmuTOS uses its own ACSI driver, not ours).
 - **Other drivers and machines:** HDDRIVER (Mega STE) assigns all letters itself, does
   not wait for the network at boot and only scans the ids enabled in HDDRUTIL; the TT
@@ -84,7 +85,8 @@ first. The old `build/` folder (if present) is an RP2040 build: don't use it.
   from the root. At the ceiling (clusters, nodes or names used up, e.g. after Show Info)
   a drive starts afresh after 2 s idle with a media change: with our driver (sub 10), and
   with HDDRIVER when console `M` (removable, INQUIRY RMB) is on (UNIT ATTENTION at its next
-  TEST UNIT READY). `M` must stay off with AHDI: it then logs the drives in again and
+  TEST UNIT READY; only after 3 or more TURs since the reset: EmuTOS sends one at boot
+  and never hears of it). `M` must stay off with AHDI: it then logs the drives in again and
   again, reading the whole FAT, and lazy loading stops (tried 2026-10-25). tnfsd drops idle sessions after 600 s; the firmware mounts again on
   status 0xFF. A drive that fails shows NET_ERR.TXT until console `N`.
 - **SD card** (SPI0: GP2 CLK, GP3 MOSI, GP4 MISO, GP5 CS; FatFs in `third_party/fatfs`,
@@ -139,17 +141,21 @@ first. The old `build/` folder (if present) is an RP2040 build: don't use it.
 
 ## To do (agreed, roughly in this order)
 
-1. Test the v2 firmware on the TT (AHDI) and with EmuTOS (ST with our driver, Mega STE
-   with HDDRIVER and ST with AHDI work on v2-cable, also STinG and the SD drive).
-2. While core0 waits for NTP (server not answering), Atari reads of ready TNFS drives
+1. Test the v2 firmware on the TT (AHDI); on the Mega STE (HDDRIVER, `M` on) check that
+   a full drive still starts afresh with the rule of 3 TEST UNIT READYs (ST with our
+   driver, ST with AHDI and EmuTOS work on v2-cable, also STinG and the SD drive).
+2. More room per drive, so AHDI and EmuTOS (no media change: reset needed) seldom hit the
+   ceiling, e.g. after Show Info: first more nodes than 1024 shared (drop the debug
+   buffers, item 7), then more than 16 MB (bigger logical sectors, as AHDI does).
+3. While core0 waits for NTP (server not answering), Atari reads of ready TNFS drives
    wait too: 3-6 s, HDDRIVER timed out once (Mega STE, 2026-10-25). net_sleep_ms only
    serves drives that are not ready.
-3. New system files on C: without `R` (sysfiles cannot tell new from deleted on purpose).
-4. SD card: still to test on a PC, with exFAT and without Wi-Fi; card swap while the
+4. New system files on C: without `R` (sysfiles cannot tell new from deleted on purpose).
+5. SD card: still to test on a PC, with exFAT and without Wi-Fi; card swap while the
    Atari runs (now: `N` and a reset; the socket has card detect on GP1).
-5. C: robustness: a CHKDSK-like console command.
-6. TNFS read cache; `pun_ptr` check next to AHDI/HDDRIVER; drop debug buffers (~100 KB).
-7. First release after the tests and the hardware.
+6. C: robustness: a CHKDSK-like console command.
+7. TNFS read cache; `pun_ptr` check next to AHDI/HDDRIVER; drop debug buffers (~100 KB).
+8. First release after the tests and the hardware.
 
 ## Test setup
 

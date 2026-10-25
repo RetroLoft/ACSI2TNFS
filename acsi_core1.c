@@ -192,7 +192,7 @@ static uint8_t  sense_code;      /* ACSI error code for REQUEST SENSE    */
 static uint8_t  sense_key, sense_asc;
 static volatile int pending_id = -1; /* new id, applied on next Atari reset */
 volatile bool g_mc_driver;       /* our driver asked for the change counters */
-volatile bool g_tur_driver;      /* removable: the driver asks TEST UNIT READY */
+volatile uint8_t g_tur_count;    /* removable: TEST UNIT READYs since the reset */
 volatile bool g_unit_attention;  /* report a medium change at the next one */
 
 /* core0 (configuration program): the id to use from the next Atari reset or
@@ -585,7 +585,7 @@ static uint8_t exec_cmd(const uint8_t *cdb, uint8_t cdb_len, uint32_t *bytes)
                    drive started afresh (lazy loading): "medium may have
                    changed", so it drops GEMDOS's cache of all our partitions */
         if (g_cfg.removable) {
-            g_tur_driver = true;
+            if (g_tur_count < 255) g_tur_count++;
             if (g_unit_attention) {
                 g_unit_attention = false;
                 set_sense(0x28, 0x06, 0x28);
@@ -884,7 +884,8 @@ static void __not_in_flash_func(target_loop)(void)
                 g_cfg.mute_until_reset = false;     /* fresh GEMDOS: safe again */
                 net_bridge_reset();                 /* STinG is gone */
                 net_atari_reset();                  /* fresh GEMDOS: TNFS from the root */
-                g_mc_driver = g_tur_driver = false; /* which driver loads is not known yet */
+                g_mc_driver = false;                /* which driver loads is not known yet */
+                g_tur_count = 0;
                 g_unit_attention = false;
                 stage_flush();                      /* core0 may change C: now */
                 stage_blk = -1;

@@ -181,9 +181,13 @@ extern volatile uint8_t g_part_gen[4];
 /* our driver asked for them since the last Atari reset: it reports media
    changes to GEMDOS (AHDI, HDDRIVER and EmuTOS do not) */
 extern volatile bool g_mc_driver;
-/* removable: the driver asks TEST UNIT READY (HDDRIVER), and the next one
-   answers UNIT ATTENTION after a drive started afresh */
-extern volatile bool g_tur_driver, g_unit_attention;
+/* removable: TEST UNIT READYs since the Atari reset, and the next one
+   answers UNIT ATTENTION after a drive started afresh. A driver that asks it
+   again and again (HDDRIVER, every few seconds) reports that as a media
+   change; EmuTOS asks it once at boot and never hears of it */
+extern volatile uint8_t g_tur_count;
+extern volatile bool g_unit_attention;
+#define TUR_DRIVER (g_tur_count >= 3)
 void disk_changed(int part);                /* bump + keep GEMDOS off until seen */
 
 /* system files on C: (sysfiles.c): number written, -1 on error */

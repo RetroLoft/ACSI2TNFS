@@ -1348,7 +1348,7 @@ static bool vdir_load(uint16_t dir)
         printf("net: %s %d: read %s: %u entries, clusters up to %lu, nodes %u/%u%s\n",
                d->sd ? "SD" : "TNFS", (int)(d - vd) + 1, p, vn[dir].child_count, (unsigned long)d->next_cl,
                d->node_end - d->root, d->node_limit - d->root,
-               d->restart ? (g_mc_driver || g_tur_driver ? " (some skipped: no room left, starting afresh when idle)"
+               d->restart ? (g_mc_driver || TUR_DRIVER ? " (some skipped: no room left, starting afresh when idle)"
                                          : " (some skipped: no room left, reset the Atari)")
                : d->skipped != skipped0 ? " (some skipped)" : "");
     }
@@ -2346,14 +2346,14 @@ void net_poll(void)
        everything synced, so no file read still runs on the old clusters. */
     for (int i = 0; i < nvd && vreq_state != 1; i++) {
         vdrive_t *d = &vd[i];
-        if (!d->restart || !d->ready || d->wr_pending || !(g_mc_driver || g_tur_driver) ||
+        if (!d->restart || !d->ready || d->wr_pending || !(g_mc_driver || TUR_DRIVER) ||
             now - d->last_req_ms < 2000)
             continue;
         cur = d;
         vfat_scan();
         cur = NULL;
         disk_changed(1 + i);
-        g_unit_attention = g_tur_driver;
+        g_unit_attention = TUR_DRIVER;
         printf("net: %s %d: tree started afresh, media change reported\n", d->sd ? "SD" : "TNFS", i + 1);
     }
     /* a second after the last write: bring the server in line */

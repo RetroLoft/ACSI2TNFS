@@ -56,6 +56,7 @@ Connect the Pico to a PC and open its serial port in a terminal program (any spe
 | `0`–`7` | ACSI id |
 | `H` | hide / show the adapter (see below) |
 | `K` | network clock on / off |
+| `M` | removable unit on / off: with **HDDRIVER** a full network or SD drive then starts afresh without a reset. Leave it off with **AHDI** (its folders would stay empty) |
 | `R` | put the system files back on C: (also new ones after a firmware update) |
 | `F` | write C: anew: **all your files on C: are lost** |
 | `B` | restart the Pico in BOOTSEL mode (for a firmware update) |
@@ -100,4 +101,4 @@ A system file that was deleted, or one that is new in the firmware, comes on C: 
 | Network drive empty | Still connecting at start-up, or console `n`: server reachable? folder correct? |
 | Drive shows only `NET_WAIT.TXT` | The adapter is still connecting: open the drive again in a moment |
 | SD drive shows only `SD_ERR.TXT` | No card, not FAT32/exFAT, or the folder is missing; fix it, console `N` and reset the Atari |
-| Folder shows only part of its files | The room of this session is used up, or TOS has read the whole FAT (also *Show Info*). Our driver: wait 2 s, close and open the folder again. AHDI/HDDRIVER: reset the Atari (see [Limitations](../README.md#limitations)) |
+| Folders empty or only partly shown | The room of the drive is used up, often by *Show Info*, which opens every folder. Our driver: wait 2 s, close and open the folder again. HDDRIVER: the same with console `M` on, else reset. AHDI: reset (see [Empty folders](../README.md#empty-folders-on-a-network-or-sd-drive)) |

@@ -1348,7 +1348,8 @@ static bool vdir_load(uint16_t dir)
         printf("net: %s %d: read %s: %u entries, clusters up to %lu, nodes %u/%u%s\n",
                d->sd ? "SD" : "TNFS", (int)(d - vd) + 1, p, vn[dir].child_count, (unsigned long)d->next_cl,
                d->node_end - d->root, d->node_limit - d->root,
-               d->restart ? " (some skipped: no room left, starting afresh when idle)"
+               d->restart ? (g_mc_driver || g_tur_driver ? " (some skipped: no room left, starting afresh when idle)"
+                                         : " (some skipped: no room left, reset the Atari)")
                : d->skipped != skipped0 ? " (some skipped)" : "");
     }
     return true;
@@ -2338,18 +2339,21 @@ void net_poll(void)
     vreq_service();
     uint32_t now = to_ms_since_boot(get_absolute_time());
     /* a folder did not fit (vdir_load): start the drive's tree afresh and
-       report a media change. Only with our driver, which asks for the change
-       counters (vendor sub 10): with the others GEMDOS would keep its old FAT.
-       Only after 2 s without reads or writes and with everything synced, so
-       no file read still runs on the old clusters. */
+       report a media change: to our driver through the change counters
+       (vendor sub 10), to HDDRIVER through UNIT ATTENTION at its next TEST
+       UNIT READY (console M, removable). Not otherwise (AHDI): GEMDOS would
+       keep its old FAT. Only after 2 s without reads or writes and with
+       everything synced, so no file read still runs on the old clusters. */
     for (int i = 0; i < nvd && vreq_state != 1; i++) {
         vdrive_t *d = &vd[i];
-        if (!d->restart || !d->ready || d->wr_pending || !g_mc_driver || now - d->last_req_ms < 2000)
+        if (!d->restart || !d->ready || d->wr_pending || !(g_mc_driver || g_tur_driver) ||
+            now - d->last_req_ms < 2000)
             continue;
         cur = d;
         vfat_scan();
         cur = NULL;
         disk_changed(1 + i);
+        g_unit_attention = g_tur_driver;
         printf("net: %s %d: tree started afresh, media change reported\n", d->sd ? "SD" : "TNFS", i + 1);
     }
     /* a second after the last write: bring the server in line */

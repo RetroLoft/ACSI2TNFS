@@ -92,13 +92,16 @@ Limitations of TNFS and SD drives
     shows as LONGFILE.TXT or LONGFI~1.TXT). Names that start
     with a dot are hidden.
   - 16 MB per drive, whatever the size of the folder behind it.
-  - The FAT can fill up: a folder gets its place in the 16 MB
-    when the Atari first opens it. When the room is used up,
-    or TOS has read the whole FAT (free space, Show Info),
-    folders opened after that show only part of their files.
-    With the adapter's own driver the drive starts afresh by
-    itself after 2 s: close the folder and open it again.
-    With AHDI or HDDRIVER: reset the Atari.
+  - The room can run out: a folder gets its place in the 16 MB
+    when the Atari first opens it, and stays there. Folders
+    opened after the room is used up show up empty.
+    SHOW INFO on a network or SD drive opens EVERY folder of it
+    to count the files: on a large server that fills the room
+    at once. Avoid it there (a small folder is fine).
+    What to do:
+    - our own driver: wait 2 s, close and open the folder
+    - HDDRIVER: the same after console M (once); else reset
+    - AHDI: reset the Atari (leave M off with AHDI)
   - At most 511 entries in the root and 254 in a folder.
   - Changes made on a PC are seen after an Atari reset.
   - The Atari writes sectors; about a second later the adapter
@@ -109,6 +112,7 @@ USB console of the Pico (any baud rate, it is USB)
   0-7 = ACSI ID     H = hide/show       K = clock on/off
   i = info          n = network status  N = reconnect drives
   R = restore system files              F = rewrite this drive
+  M = removable unit (for HDDRIVER, not with AHDI)
   B = BOOTSEL (firmware update)         h = help
 The button on the board: a short press hides or shows the
 adapter (like H). Reset the Atari after pressing it.

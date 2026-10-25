@@ -274,6 +274,14 @@ Het plafond: `vdir_load` kan een map niet helemaal plaatsen omdat de clusters (1
 - Daarna één keer `tree started afresh, media change reported`; GAMES/2 (24 entries), GAMES/1/PACMAN (6 entries), OLD en TOOLS weer gevuld, een spel gestart. Geen TIMEOUT, PROTOCOL of mismatch.
 - Eerste versie reageerde alleen op clusters op, niet op knooppunten op: Show Info liet dan alles leeg tot een reset.
 
+**Fase 2b: geprobeerd en niet gedaan (25 oktober 2026)**
+
+- Mega STE, HDDRIVER, zonder wijziging: HDDRIVER stuurt alleen INQUIRY en READ, nooit TEST UNIT READY (de adapter is een vaste schijf). Na Show Info blijven mappen leeg tot een reset; de adapter begint dan terecht niet opnieuw (onze driver draait niet).
+- De adapter als verwisselbaar gemeld (INQUIRY, RMB-bit): HDDRIVER stuurt dan om de paar seconden TEST UNIT READY. Na een verse start antwoordde de adapter eenmalig UNIT ATTENTION (sense key 6, ASC 0x28); HDDRIVER gaf dat door en GEMDOS las alles opnieuw: werkte (SD-drive, Show Info, Asteroids gestart).
+- Maar AHDI (ST): met RMB stuurt het ook TEST UNIT READY en logt GEMDOS de drives steeds opnieuw in, elke keer met de hele tweede FAT (sector 65-128). Dan zijn alle FAT-sectoren gezien en kan lazy loading geen map meer plaatsen: WEASTHER en GAMES leeg, direct na het opstarten. Zonder RMB (A/B-test): geen TEST UNIT READY, 3 FAT-sectoren gelezen, mappen gevuld.
+- Besluit (Frank): een instelling, console `M` ("removable"), standaard uit. Aan: RMB in INQUIRY en UNIT ATTENTION na een verse start, voor HDDRIVER. Uit voor AHDI. Onze eigen driver merkt er niets van (sub 10, geen TEST UNIT READY). We ondersteunen drie drivers: onze eigen, HDDRIVER en AHDI.
+- Meegenomen: de adapter antwoordt alleen op LUN 0. HDDRUTIL zag hem eerst als 1.0 tot en met 1.7.
+
 ## StinG zonder XControl en STINGINS.TOS: testverslag (12 oktober 2026, Mega STE)
 
 - StinG met de bestanden uit de back-up werkte op de Mega STE (HDDRIVER, adapter op ID 1), met XControl. Zonder XControl gaf URLVIEW "Destination host is unreachable", ook naar het eigen netwerk; er kwam geen enkel frame bij de Pico. De poortinstellingen (IP, actief) uit STING.PRT past alleen STNGPORT.CPX toe, bij het opstarten van XControl.

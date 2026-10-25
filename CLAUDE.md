@@ -48,7 +48,8 @@ first. The old `build/` folder (if present) is an RP2040 build: don't use it.
   command log, `w` network bridge stats, `W` frame timeline, `n` network status (with
   RSSI and TNFS retries), `N` rescan TNFS drives, `R` restore system files on C:, `F`
   rewrite C:, `H` hidden, `s`/`t` sniffer/target mode, `0`-`7` ACSI id, `c` SD card test
-  (type, size, partitions), `o` /OE pull-up test (U1 as after a reset). A short press on
+  (type, size, partitions), `o` /OE pull-up test (U1 as after a reset), `M` removable
+  unit for HDDRIVER (off for AHDI). A short press on
   the board's button (GP26) also toggles hidden mode. Leds: D1 (GP0) disk activity, on
   1 s after the last READ/WRITE; D2 (GP28) on, blinking while hidden; the Pico's own led
   (on the Wi-Fi chip) blinks while Wi-Fi connects, on when connected, off otherwise. Not the BOOTSEL button: reading it
@@ -80,7 +81,11 @@ first. The old `build/` folder (if present) is an RP2040 build: don't use it.
   loads from C:) or rename C:\AUTO\STING.PRG.
 - **TNFS:** folders are read when the Atari first reads them (lazy); new cluster runs only
   go into FAT sectors the Atari has not read since its reset; an Atari reset starts again
-  from the root. tnfsd drops idle sessions after 600 s; the firmware mounts again on
+  from the root. At the ceiling (clusters, nodes or names used up, e.g. after Show Info)
+  a drive starts afresh after 2 s idle with a media change: with our driver (sub 10), and
+  with HDDRIVER when console `M` (removable, INQUIRY RMB) is on (UNIT ATTENTION at its next
+  TEST UNIT READY). `M` must stay off with AHDI: it then logs the drives in again and
+  again, reading the whole FAT, and lazy loading stops (tried 2026-10-25). tnfsd drops idle sessions after 600 s; the firmware mounts again on
   status 0xFF. A drive that fails shows NET_ERR.TXT until console `N`.
 - **SD card** (SPI0: GP2 CLK, GP3 MOSI, GP4 MISO, GP5 CS; FatFs in `third_party/fatfs`,
   FAT32/exFAT, long names as 8.3): an SD drive is a folder of the card through the same
@@ -134,14 +139,14 @@ first. The old `build/` folder (if present) is an RP2040 build: don't use it.
 
 ## To do (agreed, roughly in this order)
 
-1. Test the v2 firmware on the soldered v2-cable: console first, then sniffer, then
-   target (boot from C:, write, TNFS, STinG).
-2. TNFS lazy loading phase 2b: the ceiling for HDDRIVER through UNIT ATTENTION on TEST
-   UNIT READY (tried once). Phase 2a (our driver: fresh tree + media change after 2 s
-   idle) works.
+1. Test the v2 firmware on the TT (AHDI) and with EmuTOS (ST with our driver, Mega STE
+   with HDDRIVER and ST with AHDI work on v2-cable, also STinG and the SD drive).
+2. While core0 waits for NTP (server not answering), Atari reads of ready TNFS drives
+   wait too: 3-6 s, HDDRIVER timed out once (Mega STE, 2026-10-25). net_sleep_ms only
+   serves drives that are not ready.
 3. New system files on C: without `R` (sysfiles cannot tell new from deleted on purpose).
-4. SD card: still to test on a PC, with exFAT, without Wi-Fi and under HDDRIVER; card
-   swap while the Atari runs (now: `N` and a reset).
+4. SD card: still to test on a PC, with exFAT and without Wi-Fi; card swap while the
+   Atari runs (now: `N` and a reset; the socket has card detect on GP1).
 5. C: robustness: a CHKDSK-like console command.
 6. TNFS read cache; `pun_ptr` check next to AHDI/HDDRIVER; drop debug buffers (~100 KB).
 7. First release after the tests and the hardware.

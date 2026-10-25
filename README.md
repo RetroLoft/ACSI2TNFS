@@ -175,19 +175,8 @@ The time zone is a fixed offset from UTC: change it by hand for summer time.
   with a dot are hidden.
 - **16 MB per drive.** Every TNFS and SD drive is a FAT16 partition of 16 MB, whatever
   the size of the folder behind it. A single file larger than that cannot be shown.
-- **The FAT can fill up.** The adapter builds each drive's FAT while you use it: a
-  folder gets its place in the 16 MB the first time the Atari opens it, and keeps it
-  until the drive starts afresh. Browse through many large files and the room of this
-  session runs out: folders you open after that show only part of their files. The same
-  happens once TOS has read the whole FAT (e.g. after a program asked for the free
-  space), and *Show Info* on a drive reads every folder of it.
-  - **With the adapter's own driver** the drive then starts afresh by itself: once it
-    has been idle for 2 seconds, the adapter reports a media change and TOS reads the
-    drive again. Close the folder and open it again (or press Esc on the TOS 2.06
-    desktop).
-  - **With AHDI, HDDRIVER or EmuTOS:** reset the Atari to start the drive afresh.
-  - A single folder larger than 16 MB always shows only part of its files. The USB
-    console (`n`) says "some skipped".
+- **The room per drive can run out**, and folders then show up empty: see
+  [Empty folders on a network or SD drive](#empty-folders-on-a-network-or-sd-drive).
 - **Number of files:** at most 511 entries in the root of a drive and 254 in a folder;
   and about 1000 files and folders in all the folders the Atari has opened since its
   reset, shared evenly by the drives (with three drives about 340 each).
@@ -204,6 +193,43 @@ The time zone is a fixed offset from UTC: change it by hand for summer time.
 - **TOS 1.x with several drives:** put `FOLDR100.PRG` (from Atari's AHDI) in your AUTO
   folder, or TOS runs out of folder memory ("use FOLDR100.PRG").
 - **Wi-Fi:** 2.4 GHz only (the Pico 2 W's radio).
+
+## Empty folders on a network or SD drive
+
+**Why it happens.** The Atari expects a hard disk with a FAT, a fixed table of where every
+file lies. A network or SD drive has no such table: the adapter makes it up while you use
+the drive. The first time the Atari opens a folder, the adapter reads that folder from
+the server or the card and gives each file in it a place in the drive's 16 MB. That
+place stays reserved until the drive starts afresh. The room for one session is limited:
+
+- **16 MB of file space** per drive: every file in every folder you opened counts,
+  whether you use it or not;
+- **about 340 files and folders** per drive (1000 shared by three drives);
+- **only the part of the FAT that TOS has not read yet:** TOS keeps the FAT sectors it
+  has read in memory, so the adapter cannot add new files there.
+
+**What fills it up quickly**
+
+- **Show Info** (*File → Show Info*) on a network or SD drive. To count the files and
+  bytes, TOS opens **every folder** of the drive, down to the last subfolder. On a large
+  server this uses up the room of the drive in one go, and every folder that did not
+  fit is remembered by TOS as empty. Show Info on a single small folder is fine.
+- Programs that ask for the free space of a drive: TOS then reads the whole FAT.
+- Browsing through many folders full of large files (disk images, for example).
+
+**What you see.** Folders you open after that are empty or show only part of their
+files. The USB console (`n`, and the log) says "some skipped".
+
+**What to do** depends on the hard disk driver:
+
+| Driver | What happens | What you do |
+|---|---|---|
+| **The adapter's own driver** | after 2 seconds without disk activity the adapter starts the drive afresh and reports a media change; TOS reads the drive again | close the folder and open it again (TOS 2.06: or press Esc) |
+| **HDDRIVER** | the same, once console `M` is on: the adapter then reports itself as a removable unit, and HDDRIVER asks for media changes | press `M` on the USB console once (it is stored), then reset the Atari once. Without `M`: reset the Atari |
+| **AHDI** | nothing: AHDI does not hear of media changes | reset the Atari. **Leave `M` off:** with AHDI it makes TOS read the whole FAT again and again, and folders stay empty |
+
+A reset of the Atari always starts every drive afresh, with any driver. A single folder
+whose files together are larger than 16 MB always shows only part of its files.
 
 ## Documentation
 

@@ -5,6 +5,7 @@
  *   s  sniffer mode (passive)        t  target mode (flash hard disk)
  *   0..7 ACSI id                     v  verbose command log on/off
  *   i  info / statistics             B  reboot into BOOTSEL (flashing)
+ *   M  removable unit: media change for HDDRIVER (not with AHDI)
  *   h  help
  */
 #include <stdio.h>
@@ -48,7 +49,7 @@ void disk_changed(int part)
    Settings in the last flash sector
 --------------------------------------------------------------------------- */
 #define CFG_MAGIC 0x41435349u   /* "ACSI" */
-typedef struct { uint32_t magic; uint8_t mode, id, verbose, hidden; } cfg_flash_t;
+typedef struct { uint32_t magic; uint8_t mode, id, verbose, hidden, removable; } cfg_flash_t;
 
 /* settings sector layout: [0] cfg_flash_t, [256] network settings (net.c) */
 #define CFG_NET_OFFSET 256
@@ -65,6 +66,7 @@ static void cfg_load(void)
     if (f->id <= 7) g_cfg.acsi_id = f->id;
     g_cfg.verbose = f->verbose != 0;
     g_cfg.hidden = f->hidden == 1;      /* was padding (0) before */
+    g_cfg.removable = f->removable == 1; /* 0xff before */
 }
 
 static void cfg_write_cb(void *p)
@@ -78,7 +80,7 @@ void cfg_save(void)
     static uint8_t page[CFG_BYTES];        /* RAM: XIP is off while programming */
     /* the id of the next boot: a change asked for by the configuration
        program is stored now but used only from the next reset */
-    cfg_flash_t f = { CFG_MAGIC, g_cfg.mode, (uint8_t)acsi_next_id(), g_cfg.verbose, g_cfg.hidden };
+    cfg_flash_t f = { CFG_MAGIC, g_cfg.mode, (uint8_t)acsi_next_id(), g_cfg.verbose, g_cfg.hidden, g_cfg.removable };
     uint32_t nlen;
     const void *net = net_settings_blob(&nlen);
     memset(page, 0xff, sizeof page);
@@ -249,10 +251,11 @@ static void target_event(const acsi_event_t *e)
 --------------------------------------------------------------------------- */
 static void help(void)
 {
-    printf("\nACSI2TNFS console. mode=%s id=%u verbose=%s%s\n",
+    printf("\nACSI2TNFS console. mode=%s id=%u verbose=%s%s%s\n",
            g_cfg.mode == MODE_SNIFF ? "SNIFF" : "TARGET", g_cfg.acsi_id, g_cfg.verbose ? "on" : "off",
+           g_cfg.removable ? "  removable (HDDRIVER)" : "",
            g_cfg.hidden ? "  ** HIDDEN from the Atari **" : "");
-    printf("  s=sniffer  t=target  0-7=ACSI id  v=verbose  H=hide/show  K=clock  R=restore C: files  w=Atari net  i=info  B=bootsel  h=help\n\n");
+    printf("  s=sniffer  t=target  0-7=ACSI id  v=verbose  H=hide/show  K=clock  R=restore C: files  w=Atari net  i=info  M=removable  B=bootsel  h=help\n\n");
 }
 
 static void info(void)
@@ -296,6 +299,14 @@ static void console(int ch)
     case 't': g_cfg.mode = MODE_TARGET; cfg_save(); printf("-> TARGET mode, id %u\n", g_cfg.acsi_id); break;
     case 'v': g_cfg.verbose = !g_cfg.verbose; cfg_save(); printf("verbose %s\n", g_cfg.verbose ? "on" : "off"); break;
     case 'H': toggle_hidden(); break;
+    case 'M':
+        g_cfg.removable = !g_cfg.removable;
+        cfg_save();
+        printf(g_cfg.removable
+               ? "-> REMOVABLE from the next Atari reset: HDDRIVER sees a drive that started\n"
+                 "   afresh as a media change. Not with AHDI: its folders would stay empty\n"
+               : "-> fixed unit again from the next Atari reset (AHDI, HDDRIVER without media change)\n");
+        break;
     case 'K':
         net_clock_toggle();
         break;

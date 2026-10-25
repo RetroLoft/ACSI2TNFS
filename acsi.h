@@ -101,6 +101,11 @@ typedef struct {
                                     driver has seen the media change (sub 10)
                                     or the Atari resets, so GEMDOS cannot
                                     write with its stale FAT */
+    volatile bool    removable;  /* console M: report a removable unit, so
+                                    HDDRIVER asks TEST UNIT READY and sees
+                                    UNIT ATTENTION after a drive started
+                                    afresh. Not with AHDI: it then logs the
+                                    drives in again and again (whole FAT) */
 } acsi_cfg_t;
 
 extern acsi_cfg_t g_cfg;
@@ -176,6 +181,9 @@ extern volatile uint8_t g_part_gen[4];
 /* our driver asked for them since the last Atari reset: it reports media
    changes to GEMDOS (AHDI, HDDRIVER and EmuTOS do not) */
 extern volatile bool g_mc_driver;
+/* removable: the driver asks TEST UNIT READY (HDDRIVER), and the next one
+   answers UNIT ATTENTION after a drive started afresh */
+extern volatile bool g_tur_driver, g_unit_attention;
 void disk_changed(int part);                /* bump + keep GEMDOS off until seen */
 
 /* system files on C: (sysfiles.c): number written, -1 on error */

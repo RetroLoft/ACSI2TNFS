@@ -42,7 +42,7 @@ partition of 16 MB out of the server folder. At start-up it reads only the root;
 folder is read from the server the first time the Atari opens it, and its files then
 get their place in the partition. File data is fetched from the server when the Atari
 reads it. A reset of the Atari starts again from the root. This is why the FAT can fill
-up during one session: see [Limitations](../README.md#limitations).
+up during one session: see [Empty folders](../README.md#empty-folders-on-a-network-or-sd-drive).
 
 **Writing.** GEMDOS writes sectors: first the data, then the FAT and the directory entry
 when the file is closed. The Pico keeps every written sector in a hidden file and reads
@@ -69,9 +69,10 @@ contact, and on a restart), the adapter logs in again by itself.
 ## What to keep in mind
 
 - **The limits** of names, size and number of files are in
-  [Limitations](../README.md#limitations): 8.3 names, 16 MB per drive, a FAT that can
-  fill up during one session. What does not fit is left out (console `n` says "some
-  skipped").
+  [Limitations](../README.md#limitations): 8.3 names, 16 MB per drive, and room that can
+  run out during one session, quickly after *Show Info* on the drive
+  ([Empty folders](../README.md#empty-folders-on-a-network-or-sd-drive)). What does not
+  fit is left out (console `n` says "some skipped").
 - **Files added on the server** are seen when the Atari reads that folder again: after
   an Atari reset, or USB console `N`. Changes made by the Atari itself are seen at once.
 - **Read-only files:** files without write permission on the server show as read-only.

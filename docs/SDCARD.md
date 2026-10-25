@@ -29,8 +29,8 @@ SD drives come up right after start-up, before Wi-Fi, and also work without Wi-F
 ## What to keep in mind
 
 - **The limits of a TNFS drive apply** (see [Limitations](../README.md#limitations)):
-  8.3 names (long names on the card are shortened), 16 MB per drive, and the FAT that
-  fills up during one session.
+  8.3 names (long names on the card are shortened), 16 MB per drive, and the room that
+  can run out during one session ([Empty folders](../README.md#empty-folders-on-a-network-or-sd-drive)).
 - **No card, or a card the adapter cannot read:** the drive holds one read-only file,
   `SD_ERR.TXT`, with the reason.
 - **Changing the card while the Atari runs:** after putting a card back, press `N` on

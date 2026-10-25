@@ -217,6 +217,7 @@ void cfgrpc_request(const uint8_t *blk512);   /* core1: vendor sub 5 */
 void cfgrpc_response(uint8_t *out512);        /* core1: vendor sub 6 */
 void cfgrpc_poll(void);                       /* core0: main loop    */
 void net_console_status(void);                         /* core0: 'n' command   */
+uint32_t net_update_check(char *latest, uint32_t max); /* core0: 0 up to date, 1 newer, 2 error */
 
 /* ACSI_NET, STinG network over ACSI (netbridge.c, vendor subs 0x20-0x2f) */
 void net_bridge_publish(void);                /* core0: Wi-Fi state for core1 */

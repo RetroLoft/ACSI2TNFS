@@ -401,3 +401,8 @@ De TF-01A heeft een mechanisch card-detect-contact (pin 9, op GP1). Gangbaar: op
 - Bij een verandering: wat nog naar de server of de kaart moet, eerst wegschrijven (bij uithalen niet meer wat op de kaart wachtte: melding), dan hetzelfde als console `N`. Elke drive die opkomt meldt een mediawissel; voor HDDRIVER met `M` ook UNIT ATTENTION (ook na `N`).
 
 **SD-kaart, verder getest (25 oktober 2026, ST, TOS 1.04, onze driver):** de bestanden die de Atari op de kaart schreef, zijn op een pc in orde (Frank). Opstarten zonder wifi (SSID die niet bestaat): na drie pogingen "network not found" gaat alles door, de netwerkdrives tonen NET_ERR.TXT, de SD-drive werkt (mappen ingelezen). exFAT nog niet: geen kaart over.
+
+## Versie-check voor ACSITNFS.PRG en eerste release (25 oktober 2026)
+
+- ACSITNFS.PRG vraagt bij het opstarten CMD_CHECK_UPDATE; SideTNFS haalt daarvoor `http://retroloft.net/sidetnfs/version.txt`. Onze firmware gaf altijd "fout" (geen melding). Nu: `http://retroloft.net/acsi2tnfs/version.txt` via gewoon HTTP (hoogstens 8 s), vergeleken met de eigen versie; ook console `u`. Getest: zonder bestand (301) "failed", met `v1.0.0` "is the latest", ACSITNFS.PRG toont v1.0.0 zonder melding.
+- Versie 1.0.0, eerste release op GitHub (alleen `acsi2tnfs.uf2`, prod). Bij elke release ook version.txt op retroloft.net bijwerken.

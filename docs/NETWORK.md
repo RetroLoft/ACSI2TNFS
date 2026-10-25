@@ -15,7 +15,7 @@ The disk functions keep working at the same time: C: and the network drives.
 
 ## 1. What you need
 
-- Firmware with the network function (0.4.0 or later) and Wi-Fi set up (`ACSITNFS.PRG`).
+- Firmware 1.0.0 or later, and Wi-Fi set up (`ACSITNFS.PRG`).
 - `STINGINS.TOS` on drive C: of the adapter. It carries everything else: STinG 1.26
   (Peter Rottengatter and Ronald Andersson, freeware), `TCP.STX` 1.41 by Christian Zietz
   ([chzsoft/sting](https://github.com/chzsoft/sting)), `UDP.STX`, `RESOLVE.STX`,

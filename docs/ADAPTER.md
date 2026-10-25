@@ -59,6 +59,7 @@ Connect the Pico to a PC and open its serial port in a terminal program (any spe
 | `M` | removable unit on / off: with **HDDRIVER** a full network or SD drive then starts afresh without a reset. Leave it off with **AHDI** (its folders would stay empty) |
 | `R` | put the system files back on C:, also ones you deleted |
 | `F` | write C: anew: **all your files on C: are lost** |
+| `u` | is there a newer firmware? (asks retroloft.net; `ACSITNFS.PRG` does the same at start-up) |
 | `B` | restart the Pico in BOOTSEL mode (for a firmware update) |
 | `v` | verbose: log every ACSI command |
 | `s` / `t` | sniffer mode (passive bus monitor) / target mode (normal) |

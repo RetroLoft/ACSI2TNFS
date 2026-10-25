@@ -308,11 +308,13 @@ static void handle(void)
         break;
     }
 
-    case CMD_CHECK_UPDATE:
-        o = put32(o, 2);                                /* ERROR: not implemented yet */
-        o = putstr(o, "", 16);
+    case CMD_CHECK_UPDATE: {                            /* status, latest, installed */
+        char latest[16];
+        o = put32(o, net_update_check(latest, sizeof latest));
+        o = putstr(o, latest, 16);
         o = putstr(o, "v" FW_VERSION_STR, 16);
         break;
+    }
 
     case CMD_REBOOT_PICO:
         reboot_after_reply = true;

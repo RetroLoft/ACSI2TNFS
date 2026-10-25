@@ -324,6 +324,7 @@ bool net_vwrite(uint32_t drive, uint32_t rel, uint32_t n, uint8_t *buf)
 #if !BOARD_HAS_WIFI
 
 bool net_link_up(void) { return false; }
+uint32_t net_update_check(char *latest, uint32_t max) { (void)max; latest[0] = 0; return 2; }
 void net_init(void) { clk_state = g_set.rtc_enabled ? CLK_NONE : CLK_OFF; clock_restore(); }
 void net_poll(void) { test_req = false; }
 static void drives_from_settings(void) { }
@@ -940,6 +941,102 @@ static void ntp_poll(void)
             ntp_try_until = make_timeout_time_ms(2000);
         } else ntp_round_end(false);
     }
+}
+
+/* ---------------- firmware update check (configuration program) ----------------
+ * http://retroloft.net/acsi2tnfs/version.txt holds the latest release
+ * ("v1.0.0"). Plain HTTP, as SideTNFS does: public data, nothing in it is
+ * ever run, so a tampered answer can only give a wrong notice. */
+
+#define UPD_HOST "retroloft.net"
+#define UPD_PATH "/acsi2tnfs/version.txt"
+
+static struct {
+    volatile bool up, done, dead;
+    char buf[600];
+    volatile int len;
+} upd;
+
+static err_t upd_rx(void *arg, struct tcp_pcb *t, struct pbuf *p, err_t err)
+{
+    (void)arg; (void)err;
+    if (!p) { upd.done = true; return ERR_OK; }         /* the server closed: all there */
+    int room = (int)sizeof upd.buf - 1 - upd.len;
+    int n = p->tot_len < room ? p->tot_len : room;
+    if (n > 0) pbuf_copy_partial(p, upd.buf + upd.len, (u16_t)n, 0);
+    upd.len += n;
+    tcp_recved(t, p->tot_len);
+    pbuf_free(p);
+    return ERR_OK;
+}
+
+static err_t upd_connected(void *arg, struct tcp_pcb *t, err_t err)
+{
+    (void)arg; (void)t;
+    upd.up = err == ERR_OK;
+    return ERR_OK;
+}
+
+static void upd_error(void *arg, err_t err)
+{
+    (void)arg; (void)err;
+    upd.dead = true;                                    /* the pcb is freed by lwIP */
+}
+
+/* "v1.2.3" -> 0x010203, -1 if it is not a version */
+static int32_t upd_version(const char *s)
+{
+    unsigned a, b, c;
+    if (*s == 'v') s++;
+    if (sscanf(s, "%u.%u.%u", &a, &b, &c) != 3 || a > 255 || b > 255 || c > 255) return -1;
+    return (int32_t)(a << 16 | b << 8 | c);
+}
+
+/* the latest release from retroloft.net: 0 up to date, 1 newer one there (in
+   latest), 2 could not check. Waits up to ~8 s; the configuration program
+   polls for the answer. */
+uint32_t net_update_check(char *latest, uint32_t max)
+{
+    latest[0] = 0;
+    ip_addr_t ip;
+    if (!net_link_up() || !resolve_host(UPD_HOST, &ip)) return 2;
+    memset((void *)&upd, 0, sizeof upd);
+    cyw43_arch_lwip_begin();
+    struct tcp_pcb *t = tcp_new_ip_type(IPADDR_TYPE_V4);
+    if (t) {
+        tcp_recv(t, upd_rx);
+        tcp_err(t, upd_error);
+        if (tcp_connect(t, &ip, 80, upd_connected) != ERR_OK) { tcp_abort(t); t = NULL; }
+    }
+    cyw43_arch_lwip_end();
+    if (!t) return 2;
+    absolute_time_t until = make_timeout_time_ms(8000);
+    while (!upd.up && !upd.dead && !time_reached(until)) net_sleep_ms(5);
+    if (upd.up && !upd.dead) {
+        static const char req[] = "GET " UPD_PATH " HTTP/1.0\r\nHost: " UPD_HOST "\r\n\r\n";
+        cyw43_arch_lwip_begin();
+        tcp_write(t, req, sizeof req - 1, TCP_WRITE_FLAG_COPY);
+        tcp_output(t);
+        cyw43_arch_lwip_end();
+        while (!upd.done && !upd.dead && !time_reached(until)) net_sleep_ms(5);
+    }
+    cyw43_arch_lwip_begin();
+    if (!upd.dead && tcp_close(t) != ERR_OK) tcp_abort(t);
+    cyw43_arch_lwip_end();
+
+    upd.buf[upd.len] = 0;
+    char *body = strstr(upd.buf, "\r\n\r\n");
+    if (strncmp(upd.buf, "HTTP/1.", 7) || strncmp(upd.buf + 8, " 200", 4) || !body) {
+        printf("net: update check: no answer from http://" UPD_HOST UPD_PATH "\n");
+        return 2;
+    }
+    body += 4;
+    body[strcspn(body, "\r\n \t")] = 0;
+    int32_t have = upd_version(FW_VERSION_STR), there = upd_version(body);
+    if (there < 0) return 2;
+    snprintf(latest, max, "%s", body);
+    printf("net: update check: %s is the latest, this is v%s\n", body, FW_VERSION_STR);
+    return there > have ? 1 : 0;
 }
 
 static const char *tnfs_err(uint8_t st)

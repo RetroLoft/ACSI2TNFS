@@ -261,7 +261,7 @@ static void help(void)
            g_cfg.mode == MODE_SNIFF ? "SNIFF" : "TARGET", g_cfg.acsi_id, g_cfg.verbose ? "on" : "off",
            g_cfg.removable ? "  removable (HDDRIVER)" : "",
            g_cfg.hidden ? "  ** HIDDEN from the Atari **" : "");
-    printf("  s=sniffer  t=target  0-7=ACSI id  v=verbose  H=hide/show  K=clock  R=restore C: files  w=Atari net  i=info  M=removable  B=bootsel  h=help\n\n");
+    printf("  s=sniffer  t=target  0-7=ACSI id  v=verbose  H=hide/show  K=clock  R=restore C: files  w=Atari net  i=info  M=removable  u=update?  B=bootsel  h=help\n\n");
 }
 
 static void info(void)
@@ -396,6 +396,14 @@ static void console(int ch)
     }
 #endif
     case 'c': sd_console_test(); break;
+    case 'u': {
+        char latest[16];
+        uint32_t st = net_update_check(latest, sizeof latest);
+        printf(st == 0 ? "firmware v%s is the latest\n" : st == 1 ? "firmware %s is out (this is v%s)\n"
+                                                               : "update check failed (Wi-Fi? retroloft.net?)\n",
+               st == 1 ? latest : FW_VERSION_STR, FW_VERSION_STR);
+        break;
+    }
     case 'o': {
         /* /OE and DIR of U1 as after a reset or in BOOTSEL: input with the
            internal pull-down. The 10k pull-up on /OE (R5) must win, so U1 is off

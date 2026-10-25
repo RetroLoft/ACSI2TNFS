@@ -4,7 +4,7 @@ A Raspberry Pi Pico 2 W that acts as an ACSI device for the Atari ST: a flash di
 up to 3 virtual drives (D:-P:: TNFS network drives and folders on a micro SD card, which
 also caches TNFS writes), a network clock (NTP, NETCLOCK.PRG) and a network function for
 STinG (ACSI_NET.STX, installed with STINGINS.TOS). Configured from the Atari with
-ACSITNFS.PRG. Firmware 0.4.0 (`version.txt`). User docs: `README.md`, `docs/*.md`;
+ACSITNFS.PRG. Firmware 1.0.0 (`version.txt`), first release 2026-10-25 on GitHub. User docs: `README.md`, `docs/*.md`;
 developer docs: `docs/DEVELOPMENT.md`; hardware: `hardware/README.md`;
 design and test reports (Dutch): `project-notities.md`, `ACSI_NET-ontwerp.md`.
 
@@ -156,8 +156,11 @@ first. The old `build/` folder (if present) is an RP2040 build: don't use it.
    in, only changes count, then as console `N`) is untested: Frank's v2-cable still has
    an SD breakout board without the switch. Files on a PC and start-up without Wi-Fi: ok.
 3. C: robustness: a CHKDSK-like console command.
-4. TNFS read cache; `pun_ptr` check next to AHDI/HDDRIVER.
-5. First release after the tests and the hardware.
+4. Releases: version.txt, build, tag `vX.Y.Z` (push over SSH), Frank makes the GitHub
+   release with `acsi2tnfs.uf2` (no `gh` on the Linux PC) and puts the version
+   (`v1.0.0`) in http://retroloft.net/acsi2tnfs/version.txt: the firmware's update check
+   (CMD_CHECK_UPDATE for ACSITNFS.PRG, console `u`) reads it. Not planned: a TNFS read cache
+   and a `pun_ptr` check (Frank, 2026-10-25).
 
 ## Test setup
 

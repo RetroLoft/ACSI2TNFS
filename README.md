@@ -51,10 +51,11 @@ tools.
 
 ## Getting started
 
-1. **Firmware.** Hold the Pico's BOOTSEL button while you plug it into a PC, and copy
-   `acsi2tnfs.uf2` onto the drive that appears (build it yourself: see
-   [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)). The Pico restarts and prepares its
-   settings drive.
+1. **Firmware.** Download `acsi2tnfs.uf2` from
+   [Releases](https://github.com/RetroLoft/ACSI2TNFS/releases). Hold the Pico's BOOTSEL
+   button while you plug it into a PC, and copy the file onto the drive that appears.
+   The Pico restarts and prepares its settings drive. (To build it yourself: see
+   [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).)
 2. **Connect** the adapter to the Atari's ACSI port and power the Pico over USB.
    Switch the Atari on. Without another hard disk you see `ACSI2TNFS v…` and
    `[OK] Drives installed: C:`.

@@ -321,3 +321,15 @@ Twee functies, allebei met de kaart als **optie**: zonder kaart werkt alles zoal
 - Met kaart: het tijdelijke sectorbestand van een TNFS-drive staat op de kaart (`/.A2TCACHE/T<n>.TMP`); console `n`: "TNFS writes: cached on the SD card". Map `TEST4` en drie bestanden (125 KB, 16 KB, 2 KB, een van de SD-drive) naar de LAN-drive: op de server byte voor byte gelijk. De Atari schrijft ~280 KB/s, eerst ~45 KB/s (een TNFS-WRITE per sector naar `/.A2T.TMP`). `vsync` van 125 KB: 1,4 s in plaats van 2,9-4,2 s, omdat de sectoren van de kaart worden teruggelezen.
 - Zonder kaart (eruit, `N`): "via the server (no SD card)"; schrijven gaat via `/.A2T.TMP` op de server, het bestand kwam goed aan. Kaart terug en `N`: weer de cache op de kaart.
 - Na een nieuwe TNFS-sessie (status 0xFF) blijft het tijdelijke bestand op de kaart open; alleen dat op de server moet opnieuw.
+
+## Firmware alleen voor v2: testverslag (25 oktober 2026, v2-cable op een ST)
+
+De firmware kent alleen nog de pinmap van v2/v2-cable; alles van de dev-print en v1 is eruit. De databus zit omgekeerd (D7..D0 op GP6..GP13): de PIO-programma's voor data in en uit draaien de bits om met `::`, de DMA schrijft en leest byte 3 van het FIFO-woord. /IRQ en /DRQ gaan via de 74LS07 (laag = actief): de GPIO-uitgang staat omgekeerd, dus code en PIO zetten nog steeds 1. Hidden mode gaat met de knop op de print (GP26); de BOOTSEL-knop wordt niet meer gelezen.
+
+- Pico los: firmware draait, Wi-Fi en beide TNFS-drives OK, `o` "LOW" (geen R5, klopt).
+- Op de print, Atari uit: `o` "/OE high … pull-up R5 ok"; `c` SDHC 32 GB FAT32 op 12 MHz; power-led aan, statusled uit; de knop zet hidden aan/uit.
+- Sniffer: TOS vraagt bij het opstarten READ(6) op id 0-7, bytes `08 28 48 … e8` precies goed (databus Atari → Pico).
+- Target op id 0: opstarten van C:, vier drives op het bureaublad, ~250 commando's zonder fout, `ACK data matches` (databus Pico → Atari, /IRQ, /DRQ, DIR, /OE). Leesopdrachten van 512 bytes geven `acks=512`: de LS07 laat /DRQ op tijd los (dev-print met BC547: 514).
+- Schrijven: MAGIC.RAM (246.232 bytes) van de LAN-drive naar C: en terug naar de server (`sync: write /OLD/MAGIC.RA, 246232 bytes ok`), 39 WRITE-opdrachten zonder fout.
+- Gevonden en opgelost: grote leesopdrachten misten ~160 /ACK-samples in de controle (de data zelf was goed). Oorzaak: het lezen van de BOOTSEL-knop elke 100 ms hield core1 ~150 µs stil (`flash_safe_execute`); bij TNFS-drives steeds rond byte 158 (de controle was na de lange TNFS-aanvraag achterstallig), bij C: op willekeurige plekken. Zonder BOOTSEL-uitlezing: 0 mismatches in 339 controles.
+- Bij een druk op de knop slaat de Pico de instelling op in flash; een vendor-commando van de driver dat op dat moment binnenkwam viel weg (PROTOCOL), de driver probeert opnieuw.

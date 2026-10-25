@@ -4,19 +4,21 @@
 #include "hardware/pio.h"
 
 /* ---------------------------------------------------------------------------
-   Pin map: verified PCB nets (ACSI2TNFS_hardwareoverzicht.md, section 2)
+   Pin map of v2 and v2-cable (hardware/README.md)
 --------------------------------------------------------------------------- */
-#define PIN_OE      6   /* U1 /OE, low = databuffer enabled                  */
-#define PIN_DIR     7   /* U1 DIR, 1 = Atari -> Pico, 0 = Pico -> Atari      */
-#define PIN_D0      8   /* D0..D7 = GP8..GP15                                */
+#define PIN_PWR_LED 0   /* power led                                          */
+#define PIN_DBUS    6   /* D7..D0 = GP6..GP13 (reversed); first pin of a PIO sample */
+#define PIN_DIR     14  /* U1 DIR, 1 = Atari -> Pico, 0 = Pico -> Atari       */
+#define PIN_OE      15  /* U1 /OE, low = databuffer enabled                   */
 #define PIN_CS      16
 #define PIN_RST     17
 #define PIN_ACK     18
 #define PIN_A1      19
 #define PIN_RW      20
-#define PIN_IRQ     21  /* high = /IRQ asserted (Q1)                          */
-#define PIN_DRQ     22  /* high = /DRQ asserted (Q2)                          */
-#define PIN_LED     28  /* PCB status led                                     */
+#define PIN_IRQ     21  /* through the 74LS07, low = /IRQ asserted. The GPIO  */
+#define PIN_DRQ     22  /* output is inverted: 1 = asserted for code and PIO  */
+#define PIN_BUTTON  26  /* button to GND (hidden mode)                        */
+#define PIN_LED     28  /* status led                                         */
 #ifdef CYW43_WL_GPIO_LED_PIN
 /* Pico W / Pico 2 W: the onboard led hangs on the Wi-Fi chip and GP25 is its
    SPI chip select, so never touch GP25 there; use the PCB status led. */
@@ -27,7 +29,21 @@
 #define BOARD_HAS_WIFI 0
 #endif
 
-/* bits in a 13-bit PIO sample (GP8..GP20) */
+static inline uint8_t rev8(uint8_t b)
+{
+    b = (uint8_t)((b >> 4) | (b << 4));
+    b = (uint8_t)(((b & 0xcc) >> 2) | ((b & 0x33) << 2));
+    return (uint8_t)(((b & 0xaa) >> 1) | ((b & 0x55) << 1));
+}
+
+/* a raw PIO sample (pins from GP6: D7..D0, DIR, /OE, /CS, ...) as 13 bits:
+   D0..D7, /CS, /RESET, /ACK, A1, R/W */
+static inline uint32_t smp_norm(uint32_t s)
+{
+    return rev8((uint8_t)s) | ((s >> 2) & 0x1f00);
+}
+
+/* bits in a normalised sample */
 #define S_DATA(s)   ((uint8_t)((s) & 0xff))
 #define S_CS        (1u << 8)
 #define S_RST       (1u << 9)

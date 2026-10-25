@@ -1,6 +1,6 @@
 /*
  * ACSI2TNFS - micro SD card in SPI mode on SPI0 (GP2 CLK, GP3 MOSI, GP4 MISO,
- * GP5 CS, the pin map of v2; wired the same on the dev board).
+ * GP5 CS).
  *
  * For now only what the console test 'c' needs: bring the card up, read its
  * CID/CSD and one block. Later the block layer for FatFs (to do: SD card).

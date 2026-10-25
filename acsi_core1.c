@@ -111,6 +111,7 @@ static inline bool reset_active(void) { return !gpio_get(PIN_RST); }
 /* Execute "pull; out pins|pindirs, 8" on the (disabled) DOUT state machine. */
 static void __not_in_flash_func(dout_exec_out)(uint32_t v, bool pindirs)
 {
+    if (!pindirs) v = rev8((uint8_t)v);     /* GP6 = D7 */
     pio_sm_put(pio, SM_DOUT, v);
     pio_sm_exec(pio, SM_DOUT, pio_encode_pull(false, true));
     pio_sm_exec(pio, SM_DOUT, pio_encode_out(pindirs ? pio_pindirs : pio_pins, 8));
@@ -155,7 +156,8 @@ static void __not_in_flash_func(sm_stop)(uint sm)
 }
 
 /* /ACK samples = the bytes the Atari actually latched */
-static uint8_t  ackcap[33280];   /* one 64-sector transfer + extra strobes */
+static uint8_t  ackcap[33280];   /* one 64-sector transfer + extra strobes; raw
+                                    pins GP6..GP13 (D7..D0): rev8() when compared */
 static uint32_t ackcap_n;
 static const uint8_t *exp_a, *exp_b;  /* DMA-out stream of this command */
 static uint32_t exp_alen, exp_blen;
@@ -209,20 +211,25 @@ static bool __not_in_flash_func(cs_wait)(uint32_t *s, uint32_t timeout_us)
         if (reset_active()) { res = RES_RESET; return false; }
         if (time_us_32() - t0 > timeout_us) { res = RES_TIMEOUT; return false; }
     }
-    *s = pio->rxf[SM_CS];
+    *s = smp_norm(pio->rxf[SM_CS]);
     return true;
 }
 
 /*
  * DMA: device -> Atari, as ONE continuous stream (buffer a, then buffer b).
  *
- * The RP2040 DMA keeps the PIO TX FIFO full, so there is never a gap in the
- * data. That matters: /DRQ is switched by a BC547 that releases slowly, and
- * the ST DMA chip then strobes /ACK once or twice more. Mid-stream that just
- * takes the next byte (which is already on the bus); a gap between sectors
- * would instead hand the Atari stale bytes and shift the rest of the data.
+ * The DMA keeps the PIO TX FIFO full, so there is never a gap in the data.
+ * That matters: when /DRQ releases late the ST DMA chip strobes /ACK once or
+ * twice more. Mid-stream that just takes the next byte (which is already on
+ * the bus); a gap between sectors would instead hand the Atari stale bytes
+ * and shift the rest of the data.
  */
 static int dch_a = -1, dch_b = -1, dch_la = -1;
+
+/* DMA ends of the data state machines: byte 3 of the FIFO word, where
+   acsi_dout and acsi_din reverse the bits (acsi_bus.pio) */
+#define DOUT_TXF ((volatile uint8_t *)&pio->txf[SM_DOUT] + 3)
+#define DIN_RXF  ((volatile uint8_t *)&pio->rxf[SM_DIN] + 3)
 
 /* logic analyser on PIO1: armed from the console, fires at the next write */
 #define LA_WORDS 8192
@@ -262,7 +269,7 @@ static bool __not_in_flash_func(dma_out2)(const uint8_t *a, uint32_t alen,
     channel_config_set_write_increment(&cb, false);
     channel_config_set_dreq(&cb, pio_get_dreq(pio, SM_DOUT, true));
     channel_config_set_high_priority(&cb, true);
-    dma_channel_configure(dch_b, &cb, &pio->txf[SM_DOUT], b, blen, false);
+    dma_channel_configure(dch_b, &cb, DOUT_TXF, b, blen, false);
 
     dma_channel_config ca = dma_channel_get_default_config(dch_a);
     channel_config_set_transfer_data_size(&ca, DMA_SIZE_8);
@@ -271,7 +278,7 @@ static bool __not_in_flash_func(dma_out2)(const uint8_t *a, uint32_t alen,
     channel_config_set_dreq(&ca, pio_get_dreq(pio, SM_DOUT, true));
     channel_config_set_high_priority(&ca, true);
     if (blen) channel_config_set_chain_to(&ca, dch_b);
-    dma_channel_configure(dch_a, &ca, &pio->txf[SM_DOUT], a, alen, true);
+    dma_channel_configure(dch_a, &ca, DOUT_TXF, a, alen, true);
 
     /* done when both channels finished, the FIFO is empty and the SM waits
        on "pull" with /ACK high (the last byte has been taken) */
@@ -438,8 +445,8 @@ static uint8_t read_sectors(uint32_t lba, uint32_t n)
     /*
      * Copy to RAM first, then stream: a flash (XIP) read can stall for a
      * moment (cache miss, core0 running code from flash). If the DOUT state
-     * machine runs dry then, the /DRQ line that is still low (slow BC547)
-     * makes the ST strobe /ACK again and it latches the previous byte twice.
+     * machine runs dry then, a /DRQ line that is still low makes the ST
+     * strobe /ACK again and it latches the previous byte twice.
      */
     bool ok;
     if (n <= WBUF_SECTORS) {
@@ -459,9 +466,9 @@ static uint8_t read_sectors(uint32_t lba, uint32_t n)
 
 /*
  * DMA: Atari -> device, whole transfer into buf.
- * RP2040 DMA first, THEN the state machine: the SM must never stall on a full
- * FIFO, because the real /DRQ line stays low for ~1 us after we release it
- * (slow BC547) and the ST keeps sending bytes during that time.
+ * DMA first, THEN the state machine: the SM must never stall on a full FIFO,
+ * because the ST keeps sending bytes while /DRQ is still low after we
+ * release it.
  */
 static bool dma_in(uint8_t *buf, uint32_t len)
 {
@@ -474,7 +481,7 @@ static bool dma_in(uint8_t *buf, uint32_t len)
     channel_config_set_write_increment(&c, true);
     channel_config_set_dreq(&c, pio_get_dreq(pio, SM_DIN, false));
     channel_config_set_high_priority(&c, true);
-    dma_channel_configure(dch_a, &c, buf, &pio->rxf[SM_DIN], len, true);
+    dma_channel_configure(dch_a, &c, buf, DIN_RXF, len, true);
     sm_start(SM_DIN, off_din + acsi_din_offset_start);
 
     bool ok = true;
@@ -775,10 +782,10 @@ static void __not_in_flash_func(handle_command)(uint32_t s0)
         uint32_t tot = exp_alen + exp_blen;
         uint32_t m = tot < ackcap_n ? tot : ackcap_n;
         for (uint32_t i = 0; i < m; i++)
-            if (ackcap[i] != exp_byte(i)) { L.mism = (uint16_t)i; break; }
+            if (rev8(ackcap[i]) != exp_byte(i)) { L.mism = (uint16_t)i; break; }
         uint32_t b = L.mism == 0xffff ? (m >= 4 ? m - 4 : 0) : (L.mism >= 2 ? L.mism - 2u : 0);
         for (uint32_t i = 0; i < 8; i++) {
-            L.got[i] = b + i < ackcap_n ? ackcap[b + i] : 0xee;
+            L.got[i] = b + i < ackcap_n ? rev8(ackcap[b + i]) : 0xee;
             L.exp[i] = exp_byte(b + i);
         }
     }
@@ -824,9 +831,9 @@ static void __not_in_flash_func(sniff_loop)(void)
     ev_push(EV_RESET, rst, 0);
     while (g_cfg.mode == MODE_SNIFF) {
         while (!pio_sm_is_rx_fifo_empty(pio, SM_CS))
-            ev_push(EV_CS, (uint16_t)pio->rxf[SM_CS], 0);
+            ev_push(EV_CS, (uint16_t)smp_norm(pio->rxf[SM_CS]), 0);
         while (!pio_sm_is_rx_fifo_empty(pio, SM_ACK))
-            ev_push(EV_ACK, (uint16_t)pio->rxf[SM_ACK], 0);
+            ev_push(EV_ACK, (uint16_t)smp_norm(pio->rxf[SM_ACK]), 0);
         bool r = gpio_get(PIN_RST);
         if (r != rst) {
             rst = r;
@@ -869,7 +876,7 @@ static void __not_in_flash_func(target_loop)(void)
             have_pending = false;
             s = pending_sample;
         } else if (!pio_sm_is_rx_fifo_empty(pio, SM_CS)) {
-            s = pio->rxf[SM_CS];
+            s = smp_norm(pio->rxf[SM_CS]);
         } else {
             continue;
         }
@@ -887,20 +894,31 @@ static void __not_in_flash_func(target_loop)(void)
 --------------------------------------------------------------------------- */
 void acsi_hw_init(void)
 {
-    /* buffer control: enabled, Atari -> Pico (same as the resistor defaults) */
+    /* buffer control: enabled, Atari -> Pico */
     gpio_init(PIN_OE);  gpio_put(PIN_OE, 0);  gpio_set_dir(PIN_OE, GPIO_OUT);
     gpio_init(PIN_DIR); gpio_put(PIN_DIR, 1); gpio_set_dir(PIN_DIR, GPIO_OUT);
 
-    for (uint p = PIN_D0; p <= PIN_RW; p++) {
+    for (uint p = PIN_DBUS; p < PIN_DBUS + 8; p++) {
         gpio_init(p);
         gpio_set_dir(p, GPIO_IN);
         gpio_disable_pulls(p);
     }
-    /* IRQ/DRQ transistors: keep off */
-    gpio_init(PIN_IRQ); gpio_put(PIN_IRQ, 0); gpio_set_dir(PIN_IRQ, GPIO_OUT);
-    gpio_init(PIN_DRQ); gpio_put(PIN_DRQ, 0); gpio_set_dir(PIN_DRQ, GPIO_OUT);
+    for (uint p = PIN_CS; p <= PIN_RW; p++) {
+        gpio_init(p);
+        gpio_set_dir(p, GPIO_IN);
+        gpio_disable_pulls(p);
+    }
+    /* IRQ/DRQ: keep off. The 74LS07 passes the level on (low = asserted), so
+       the output is inverted before the pin becomes an output */
+    gpio_init(PIN_IRQ); gpio_init(PIN_DRQ);
+    gpio_set_outover(PIN_IRQ, GPIO_OVERRIDE_INVERT);
+    gpio_set_outover(PIN_DRQ, GPIO_OVERRIDE_INVERT);
+    gpio_put(PIN_IRQ, 0); gpio_set_dir(PIN_IRQ, GPIO_OUT);
+    gpio_put(PIN_DRQ, 0); gpio_set_dir(PIN_DRQ, GPIO_OUT);
 
     gpio_init(PIN_LED); gpio_put(PIN_LED, 0); gpio_set_dir(PIN_LED, GPIO_OUT);
+    gpio_init(PIN_PWR_LED); gpio_put(PIN_PWR_LED, 1); gpio_set_dir(PIN_PWR_LED, GPIO_OUT);
+    gpio_init(PIN_BUTTON); gpio_pull_up(PIN_BUTTON);
 
     /* claim our state machines so the Wi-Fi driver (CYW43 uses a PIO SM for
        its SPI bus) picks a different one */
@@ -912,23 +930,23 @@ void acsi_hw_init(void)
     off_dout = pio_add_program(pio, &acsi_dout_program);
     off_din  = pio_add_program(pio, &acsi_din_program);
 
-    /* SM_CS: in = GP8.., set = IRQ */
+    /* SM_CS: in = data bus.., set = IRQ */
     pio_sm_config c = acsi_cs_program_get_default_config(off_cs);
-    sm_config_set_in_pins(&c, PIN_D0);
+    sm_config_set_in_pins(&c, PIN_DBUS);
     sm_config_set_in_shift(&c, false, false, 32);
     sm_config_set_set_pins(&c, PIN_IRQ, 1);
     sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
     pio_sm_init(pio, SM_CS, off_cs, &c);
 
     c = acsi_ack_program_get_default_config(off_ack);
-    sm_config_set_in_pins(&c, PIN_D0);
+    sm_config_set_in_pins(&c, PIN_DBUS);
     sm_config_set_jmp_pin(&c, PIN_ACK);
     sm_config_set_in_shift(&c, false, false, 32);
     sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
     pio_sm_init(pio, SM_ACK, off_ack, &c);
 
     c = acsi_dout_program_get_default_config(off_dout);
-    sm_config_set_out_pins(&c, PIN_D0, 8);
+    sm_config_set_out_pins(&c, PIN_DBUS, 8);
     sm_config_set_jmp_pin(&c, PIN_ACK);
     sm_config_set_out_shift(&c, true, false, 32);
     sm_config_set_set_pins(&c, PIN_DRQ, 1);
@@ -936,20 +954,25 @@ void acsi_hw_init(void)
     pio_sm_init(pio, SM_DOUT, off_dout, &c);
 
     c = acsi_din_program_get_default_config(off_din);
-    sm_config_set_in_pins(&c, PIN_D0);
+    sm_config_set_in_pins(&c, PIN_DBUS);
     sm_config_set_jmp_pin(&c, PIN_ACK);
     sm_config_set_in_shift(&c, false, false, 32);
     sm_config_set_set_pins(&c, PIN_DRQ, 1);
     sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
     pio_sm_init(pio, SM_DIN, off_din, &c);
 
-    /* pin levels first, then hand IRQ/DRQ and the data pins to PIO */
-    pio_sm_set_pins_with_mask(pio, SM_CS, 0, (1u << PIN_IRQ) | (1u << PIN_DRQ) | (0xffu << PIN_D0));
-    pio_sm_set_pindirs_with_mask(pio, SM_CS, (1u << PIN_IRQ) | (1u << PIN_DRQ),
-                                 (1u << PIN_IRQ) | (1u << PIN_DRQ) | (0xffu << PIN_D0));
-    for (uint p = PIN_D0; p < PIN_D0 + 8; p++) pio_gpio_init(pio, p);
+    /* pin levels first, then hand IRQ/DRQ and the data pins to PIO as inputs.
+       pio_gpio_init clears the output inversion: set it again before IRQ/DRQ
+       become outputs, or /IRQ would pulse low */
+    uint32_t qmask = (1u << PIN_IRQ) | (1u << PIN_DRQ);
+    pio_sm_set_pins_with_mask(pio, SM_CS, 0, qmask | (0xffu << PIN_DBUS));
+    pio_sm_set_pindirs_with_mask(pio, SM_CS, 0, qmask | (0xffu << PIN_DBUS));
+    for (uint p = PIN_DBUS; p < PIN_DBUS + 8; p++) pio_gpio_init(pio, p);
     pio_gpio_init(pio, PIN_IRQ);
     pio_gpio_init(pio, PIN_DRQ);
+    gpio_set_outover(PIN_IRQ, GPIO_OVERRIDE_INVERT);
+    gpio_set_outover(PIN_DRQ, GPIO_OVERRIDE_INVERT);
+    pio_sm_set_pindirs_with_mask(pio, SM_CS, qmask, qmask);
     bus_driven = false;
 
     dch_a = dma_claim_unused_channel(true);
@@ -957,7 +980,7 @@ void acsi_hw_init(void)
     dch_la = dma_claim_unused_channel(true);
     off_la = pio_add_program(pio1, &acsi_la_program);
     pio_sm_config lc = acsi_la_program_get_default_config(off_la);
-    sm_config_set_in_pins(&lc, PIN_D0);
+    sm_config_set_in_pins(&lc, PIN_DBUS);
     sm_config_set_in_shift(&lc, true, true, 32);
     sm_config_set_fifo_join(&lc, PIO_FIFO_JOIN_RX);
     sm_config_set_clkdiv(&lc, 2.0f);           /* 62.5 MHz = 16 ns per sample */

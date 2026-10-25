@@ -109,8 +109,8 @@ USB console of the Pico (any baud rate, it is USB)
   i = info          n = network status  N = reconnect drives
   R = restore system files              F = rewrite this drive
   B = BOOTSEL (firmware update)         h = help
-BOOTSEL button on the Pico: a short press hides or shows the
-adapter (like H); while hidden the led blinks slowly. Reset the
-Atari after pressing it.
+The button on the board: a short press hides or shows the
+adapter (like H); while hidden the Pico's led blinks slowly.
+Reset the Atari after pressing it.
 
 More: github.com/RetroLoft/ACSI2TNFS

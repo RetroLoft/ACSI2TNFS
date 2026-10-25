@@ -49,7 +49,9 @@ first. The old `build/` folder (if present) is an RP2040 build: don't use it.
   RSSI and TNFS retries), `N` rescan TNFS drives, `R` restore system files on C:, `F`
   rewrite C:, `H` hidden, `s`/`t` sniffer/target mode, `0`-`7` ACSI id, `c` SD card test
   (type, size, partitions), `o` /OE pull-up test (U1 as after a reset). A short press on
-  the BOOTSEL button also toggles hidden mode (until a board with its own button).
+  the board's button (GP26) also toggles hidden mode. Not the BOOTSEL button: reading it
+  needs flash_safe_execute, which held core1 off ~150 us every 100 ms (the /ACK check of
+  big reads then missed ~160 strobes; the data itself was fine).
 
 ## Things that cost a lot of time (don't repeat)
 
@@ -110,27 +112,28 @@ first. The old `build/` folder (if present) is an RP2040 build: don't use it.
   NET_WAIT.TXT while connecting; Wi-Fi power saving off; ACSI_NET.STX 00.08 and
   STINGINS.TOS (STinG without XControl); ST-RAM builds for the TT. Tested on the Mega STE
   (TOS 2.06, HDDRIVER, adapter on ACSI id 1) and the TT (TOS 3.06, AHDI, ACSI id 0), and with
-  TOS 1.02, 1.04 and EmuTOS. Firmware still uses the pin map of the old **dev board**
-  (data GP8-GP15, /OE GP6, DIR GP7, /IRQ and /DRQ through BC547s, high = active).
+  TOS 1.02, 1.04 and EmuTOS (all on the old dev board). Since 2026-10-25 the firmware
+  supports only the v2 pin map (data D7..D0 on GP6-GP13, reversed in the PIO with `::`
+  and the DMA on byte 3 of the FIFO word; DIR GP14, /OE GP15; /IRQ and /DRQ through a
+  74LS07, GPIO output inverted); not yet tested on a v2 board.
 - Hardware: KiCad projects `hardware/v2` (DB19 on the board) and `hardware/v2-cable`
-  (flat cable to a Lotharek adapter, pass-through), one circuit with a 74LS07 and a
-  **different pin map** (see `hardware/README.md`); both with a TF-01A micro SD socket.
-  The dev board and v1 projects are gone (in git history). No gerbers yet (Frank uses
+  (flat cable to a Lotharek adapter, pass-through), one circuit with a 74LS07 and one
+  pin map (see `hardware/README.md`); both with a TF-01A micro SD socket. The dev board
+  and v1 are no longer supported (in git history). No gerbers yet (Frank uses
   the KiCad plugin Fabrication Toolkit for JLCPCB). `hardware/v2-cable/case/`:
   3D-printable case (OpenSCAD `case.scad`, STLs; one bottom, two lids).
 - The time zone is a fixed UTC offset (ACSITNFS.PRG), no automatic summer time: Frank's
   choice.
-- The dev board has R8 on /OE as a pull-down (`o` shows it): U1 is on while the Pico is
-  in reset or BOOTSEL. v2 has the pull-up.
+- v2 has R5 as a pull-up on /OE (`o` shows it): U1 is off while the Pico is in reset or
+  BOOTSEL.
 - Sibling repos (same parent folder): `atari-net-tools` (URLVIEW.TTP: view, `-n` speed
   test, `-o` save to file) and `SideTNFS-Config` (ACSITNFS.PRG, branch `acsi-transport`,
   not merged; its build still has TT-RAM program flags: patched on C: only).
 
 ## To do (agreed, roughly in this order)
 
-1. Firmware board setting for `v2`/`v2-cable`: pin map (data bus reversed on GP6-GP13,
-   DIR GP14, /OE GP15), /IRQ and /DRQ low = active, button GP26, status led GP28.
-   Preferably one build that reads the board type from flash.
+1. Test the v2 firmware on the soldered v2-cable: console first, then sniffer, then
+   target (boot from C:, write, TNFS, STinG).
 2. TNFS lazy loading phase 2: at the ceiling (16 MB full or all FAT sectors read) a
    media change; for HDDRIVER through UNIT ATTENTION on TEST UNIT READY (tried once).
 3. New system files on C: without `R` (sysfiles cannot tell new from deleted on purpose).

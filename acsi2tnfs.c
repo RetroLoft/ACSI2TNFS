@@ -18,8 +18,6 @@
 #include "hardware/watchdog.h"
 #include "hardware/clocks.h"
 #include "hardware/sync.h"
-#include "hardware/structs/ioqspi.h"
-#include "hardware/structs/sio.h"
 #include "acsi.h"
 #include "disk_seed.h"
 
@@ -264,10 +262,10 @@ static void info(void)
            (unsigned long)g_stats.resets, (unsigned long)g_stats.ack_mismatch);
     printf("pins now: CS=%d RST=%d ACK=%d A1=%d RW=%d data=%02lx\n",
            gpio_get(PIN_CS), gpio_get(PIN_RST), gpio_get(PIN_ACK), gpio_get(PIN_A1),
-           gpio_get(PIN_RW), (unsigned long)((gpio_get_all() >> PIN_D0) & 0xff));
+           gpio_get(PIN_RW), (unsigned long)S_DATA(smp_norm(gpio_get_all() >> PIN_DBUS)));
 }
 
-/* console H or the BOOTSEL button */
+/* console H or the button */
 static void toggle_hidden(void)
 {
     g_cfg.hidden = !g_cfg.hidden;
@@ -276,37 +274,16 @@ static void toggle_hidden(void)
                         : "-> VISIBLE again on id %u, reset the Atari to boot from it\n", g_cfg.acsi_id);
 }
 
-/* The BOOTSEL button pulls the flash chip select low; it can only be read
-   with that pin's output switched off for a moment (pico-examples
-   picoboard/button). No code may run from flash meanwhile: core1 is held
-   off through flash_safe_execute, interrupts are off here. */
-static void __no_inline_not_in_flash_func(bootsel_cb)(void *param)
-{
-    const uint CS_PIN_INDEX = 1;
-    hw_write_masked(&ioqspi_hw->io[CS_PIN_INDEX].ctrl,
-                    GPIO_OVERRIDE_LOW << IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_LSB,
-                    IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_BITS);
-    for (volatile int i = 0; i < 1000; ++i) ;
-#if PICO_RP2040
-    *(bool *)param = !(sio_hw->gpio_hi_in & (1u << CS_PIN_INDEX));
-#else
-    *(bool *)param = !(sio_hw->gpio_hi_in & SIO_GPIO_HI_IN_QSPI_CSN_BITS);
-#endif
-    hw_write_masked(&ioqspi_hw->io[CS_PIN_INDEX].ctrl,
-                    GPIO_OVERRIDE_NORMAL << IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_LSB,
-                    IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_BITS);
-}
-
-/* every 100 ms; a press counts once, after two readings in a row */
-static void bootsel_poll(uint32_t now)
+/* the board's button (GP26), every 100 ms; a press counts once, after two
+   readings in a row. Not the Pico's BOOTSEL button: reading that one holds
+   core1 off for ~150 us, and its /ACK check then misses strobes */
+static void button_poll(uint32_t now)
 {
     static uint32_t last;
     static int down;
-    bool pressed = false;
     if (now - last < 100000) return;
     last = now;
-    if (flash_safe_execute(bootsel_cb, &pressed, 10) != PICO_OK) return;   /* core1 busy: next time */
-    if (!pressed) { down = 0; return; }
+    if (gpio_get(PIN_BUTTON)) { down = 0; return; }
     if (++down == 2) toggle_hidden();
 }
 
@@ -352,12 +329,13 @@ static void console(int ch)
     case 'L': la_done = false; la_armed = true; printf("logic analyser armed (next WRITE)\n"); break;
     case 'l': {
         if (!la_done) { printf("no capture\n"); break; }
-        const uint16_t *smp = (const uint16_t *)la_buf;
-        uint16_t prev = 0xffff;
+        uint32_t prev = 0xffffffff;
         int lines = 0;
         printf("LA t(16ns) D7-0 CS RST ACK A1 RW IRQo DRQo\n");
-        for (uint32_t i = 0; i < LA_WORDS * 2 && lines < 4000; i++) {
-            uint16_t v = smp[i] & 0x7fff;
+        for (uint32_t i = 0; i < LA_WORDS && lines < 4000; i++) {
+            /* pins from GP6; IRQ and DRQ out (GP21/GP22, low = asserted) shown
+               as 1 = asserted */
+            uint32_t v = smp_norm(la_buf[i]) | (((~la_buf[i] >> 15) & 3) << 13);
             if (v != prev) {
                 printf("LA %5lu %02x %d %d %d %d %d %d %d\n", (unsigned long)i, v & 0xff,
                        (v >> 8) & 1, (v >> 9) & 1, (v >> 10) & 1, (v >> 11) & 1, (v >> 12) & 1,
@@ -396,8 +374,8 @@ static void console(int ch)
     }
     case 'c': sd_console_test(); break;
     case 'o': {
-        /* /OE (GP6) and DIR (GP7) of U1 as after a reset or in BOOTSEL: input with
-           the internal pull-down. A 10k pull-up on /OE (R8) must win, so U1 is off
+        /* /OE and DIR of U1 as after a reset or in BOOTSEL: input with the
+           internal pull-down. The 10k pull-up on /OE (R5) must win, so U1 is off
            while the Pico does not run. A few us; use it while the Atari is idle. */
         bool pd6 = gpio_is_pulled_down(PIN_OE), pu6 = gpio_is_pulled_up(PIN_OE);
         bool pd7 = gpio_is_pulled_down(PIN_DIR), pu7 = gpio_is_pulled_up(PIN_DIR);
@@ -414,7 +392,7 @@ static void console(int ch)
         gpio_set_pulls(PIN_DIR, pu7, pd7);
         restore_interrupts(irq);
         printf("as after a reset: /OE %s, DIR %s\n",
-               oe ? "high: U1 off, the Atari's bus is free (pull-up R8 ok)"
+               oe ? "high: U1 off, the Atari's bus is free (pull-up R5 ok)"
                   : "LOW: U1 on, it drives the Atari's bus (no pull-up on /OE)",
                dir ? "high" : "low (does not matter while /OE is high)");
         break;
@@ -496,7 +474,7 @@ int main(void)
             last_hb = now;
             gpio_put(PIN_LED_PICO, g_cfg.mode == MODE_TARGET ? 1 : !gpio_get(PIN_LED_PICO));
         }
-        bootsel_poll(now);
+        button_poll(now);
         if (BOARD_HAS_WIFI) {               /* hidden: the Pico's own led blinks slowly */
             static int led = -1;
             int want = g_cfg.hidden && (now / 1000000) % 2;

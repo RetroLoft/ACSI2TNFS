@@ -1,15 +1,11 @@
 # ACSI2TNFS hardware
 
-There are two boards with the same circuit, so one firmware fits both. Only the way
-they connect to the Atari's ACSI port differs:
+There are two boards with the same circuit and pin map, so one firmware fits both. Only
+the way they connect to the Atari's ACSI port differs:
 
 - **`v2`** plugs straight into the ACSI port, without a cable.
 - **`v2-cable`** connects through a Lotharek DB19 adapter and a 20-wire flat cable, and
   can pass the ACSI bus on to another device, such as Lotharek's UltraSatan.
-
-> **Firmware:** the current firmware still uses the pin map of the earlier development
-> board. A board setting for `v2` / `v2-cable` (different GPIOs, see the pin map below)
-> is still to come.
 
 ## Which one?
 

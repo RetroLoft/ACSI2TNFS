@@ -1,12 +1,19 @@
-; ACSI bus PIO programs for the ACSI2TNFS board (Pico, PIO0)
+; ACSI bus PIO programs for the ACSI2TNFS board (v2 and v2-cable; Pico, PIO0)
 ;
-; Pin map (PCB):  GP8..GP15 = D0..D7 (through U1 SN74LVC245A)
-;                 GP16 = /CS, GP17 = /RESET, GP18 = /ACK, GP19 = A1, GP20 = R/W
-;                 GP21 = IRQ transistor (high = /IRQ low)
-;                 GP22 = DRQ transistor (high = /DRQ low)
+; Pin map (hardware/README.md):
+;   GP6..GP13 = D7..D0 (reversed, through U1 74LVC245), GP14 = DIR, GP15 = /OE of U1
+;   GP16 = /CS, GP17 = /RESET, GP18 = /ACK, GP19 = A1, GP20 = R/W
+;   GP21 = IRQ, GP22 = DRQ (through the 74LS07, low = asserted; the GPIO output
+;   is inverted, so "set pins, 1" asserts)
 ;
-; A captured sample is 13 bits: bit0-7 = D0..D7, bit8 = /CS, bit9 = /RESET,
-; bit10 = /ACK, bit11 = A1, bit12 = R/W.
+; in_base and out_base = GP6. A /CS sample is 15 pins from there; the firmware
+; turns it into 13 bits (smp_norm in acsi.h): bit0-7 = D0..D7, bit8 = /CS,
+; bit9 = /RESET, bit10 = /ACK, bit11 = A1, bit12 = R/W.
+;
+; The data bus is reversed: acsi_dout and acsi_din reverse the bits with "::".
+; The DMA writes each byte to byte 3 of the TX FIFO word ("::osr" puts bits
+; 31-24 reversed on GP6..GP13) and reads byte 3 of the RX FIFO word ("::pins"
+; puts GP13..GP6 = D0..D7 in bits 24-31).
 ;
 ; Timing (Atari ACSI/DMA Integration Guide, B4):
 ;   /CS write : data valid 80 ns before /CS falls, /CS low 220..270 ns
@@ -26,7 +33,7 @@
     wait 0 gpio 16
     set pins, 0             ; release /IRQ
     nop [15]
-    in pins, 13
+    in pins, 15
     push noblock
 .wrap
 
@@ -52,11 +59,11 @@ high:
 
 ; ---------------------------------------------------------------------------
 ; SM2: DMA data from device to Atari (Atari "read").
-; out_base = GP8 (8 pins), set_base = GP22 (DRQ). One byte per FIFO word.
+; out_base = GP6 (8 pins), set_base = GP22 (DRQ). One byte per FIFO word.
 ; The byte is on the bus before /DRQ is asserted and stays until /ACK rises.
-; Because /DRQ releases slowly (BC547) the ST strobes back to back at full
-; speed, so the next byte must follow /ACK's rising edge as fast as possible:
-; it is pulled during the /ACK pulse and put out right after the edge.
+; If /DRQ releases late the ST strobes back to back at full speed, so the
+; next byte must follow /ACK's rising edge as fast as possible: it is pulled
+; during the /ACK pulse and put out right after the edge.
 ; Glitch filter: switching all 8 data lines at once (e.g. to 0xFF) right
 ; after /ACK rises bounces the buffers' ground and shows up as a few-ns low
 ; glitch on the /ACK input. A falling edge only counts if /ACK is still low
@@ -66,7 +73,7 @@ high:
 public start:
     pull block              ; first byte
 .wrap_target
-    out pins, 8             ; byte on the bus (OSR already loaded)
+    mov pins, ::osr         ; byte on the bus, bits reversed (OSR already loaded)
     set pins, 1 [7]         ; assert /DRQ; ignore /ACK while the data lines
                             ; settle (0xFF bounce looked like a strobe and
                             ; made us skip a byte). Real strobes are >= 220 ns.
@@ -83,8 +90,8 @@ public fetch:
 
 ; ---------------------------------------------------------------------------
 ; SM3: DMA data from Atari to device (Atari "write").
-; in_base = GP8, set_base = GP22 (DRQ), jmp_pin = GP18 (/ACK).
-; On writes the ST sometimes gives short, back-to-back /ACK pulses (slow
+; in_base = GP6, set_base = GP22 (DRQ), jmp_pin = GP18 (/ACK).
+; On writes the ST sometimes gives short, back-to-back /ACK pulses (late
 ; /DRQ release + DMA FIFO refill), and the byte is not always on the bus at
 ; the falling edge. So: sample continuously while /ACK is low and keep the
 ; last value before the rising edge.
@@ -92,7 +99,7 @@ public fetch:
 ; have been taken just after the edge, when the ST already puts the next byte
 ; on the bus (seen: a byte now and then got the value of the byte after it).
 ; The one before it was taken while /ACK was certainly still low.
-; The RX FIFO is emptied by RP2040 DMA, so this SM never stalls.
+; The RX FIFO is emptied by DMA, so this SM never stalls.
 ; ---------------------------------------------------------------------------
 .program acsi_din
 public start:
@@ -102,10 +109,10 @@ fall:
     wait 0 gpio 18 [2]
     jmp pin fall            ; glitch filter, see acsi_dout
     set pins, 0             ; release /DRQ
-    mov isr, pins           ; /ACK is low here
+    mov isr, ::pins         ; /ACK is low here; D0..D7 in bits 24-31
 low:
     mov x, isr              ; last sample taken while /ACK was low
-    mov isr, pins
+    mov isr, ::pins
     jmp pin high
     jmp low
 high:
@@ -114,10 +121,10 @@ high:
 .wrap
 
 ; ---------------------------------------------------------------------------
-; PIO1 SM0: logic analyser. 16 pins from GP8 (D0-D7, /CS, /RESET, /ACK, A1,
-; R/W, IRQ out, DRQ out, GP23) every PIO clock; two samples per FIFO word.
+; PIO1 SM0: logic analyser. The pins from GP6 every PIO clock, one sample per
+; FIFO word: D7-D0, DIR, /OE, /CS, /RESET, /ACK, A1, R/W, IRQ out, DRQ out, ...
 ; ---------------------------------------------------------------------------
 .program acsi_la
 .wrap_target
-    in pins, 16
+    in pins, 32
 .wrap

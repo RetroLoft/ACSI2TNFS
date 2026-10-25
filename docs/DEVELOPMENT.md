@@ -87,10 +87,10 @@ design of the network function, with the reasoning and the test reports, is in
 
 - The design rules for the boards (no pull-ups on /IRQ and /DRQ, pull-up on /OE, pull-ups
   on the 74LS07 inputs) are in [hardware/README.md](../hardware/README.md).
-- The firmware still uses the pin map of the earlier development board (no longer in the
-  repo: data on GP8-GP15, /OE GP6, DIR GP7, /IRQ and /DRQ through BC547s, high = active).
-  Its BC547 releases /DRQ about 1 µs late; the firmware copes with it, `v2` and `v2-cable`
-  use a 74LS07.
+- The data bus is wired reversed (D7..D0 on GP6..GP13): the PIO programs reverse the bits
+  with `::`, and the DMA writes and reads byte 3 of the FIFO word (`acsi_bus.pio`).
+  /IRQ and /DRQ go through a 74LS07 (low = asserted); the GPIO outputs are inverted, so
+  the code and the PIO set 1 to assert.
 - Reads hold each byte about 130 ns after /ACK rises; with less the DMA chip now and then
   latched the next byte.
 
